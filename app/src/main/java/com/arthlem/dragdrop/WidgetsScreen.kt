@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.arthlem.dragdrop
 
 import android.content.ClipData
@@ -59,6 +61,30 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 private const val LONG_PRESS_TIMEOUT_MS = 200L
 
+private fun acceptPlainText(event: DragAndDropEvent): Boolean =
+    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
+
+@Composable
+private fun rememberDropTarget(
+    onHover: () -> Unit,
+    onDrop: () -> Unit,
+    onEnded: () -> Unit,
+): DragAndDropTarget {
+    val currentOnHover by rememberUpdatedState(onHover)
+    val currentOnDrop by rememberUpdatedState(onDrop)
+    val currentOnEnded by rememberUpdatedState(onEnded)
+    return remember {
+        object : DragAndDropTarget {
+            override fun onEntered(event: DragAndDropEvent) { currentOnHover() }
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                currentOnDrop()
+                return true
+            }
+            override fun onEnded(event: DragAndDropEvent) { currentOnEnded() }
+        }
+    }
+}
+
 @Composable
 fun WidgetsScreen(viewModel: WidgetsViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -73,11 +99,13 @@ fun WidgetsScreen(viewModel: WidgetsViewModel = viewModel()) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WidgetsContent(viewModel: WidgetsViewModel) {
     val entries: List<GridEntry> = viewModel.entries
     val dragState = viewModel.dragState
+    val commitIfDragging: () -> Unit = {
+        if (viewModel.dragState != null) viewModel.onDragCommit()
+    }
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -104,13 +132,9 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
             when (entry) {
                 is GridEntry.Header -> HeaderCell(
                     title = entry.title,
-                    headerKey = entry.key,
-                    isDragActive = dragState != null,
                     onHover = { viewModel.onDragHover(entry.key) },
                     onDrop = { viewModel.onDragCommit() },
-                    onEnded = {
-                        if (viewModel.dragState != null) viewModel.onDragCommit()
-                    },
+                    onEnded = commitIfDragging,
                     modifier = Modifier.animateItem(),
                 )
                 is GridEntry.Empty -> EmptyDropZone(
@@ -118,9 +142,7 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                     isDragActive = dragState != null,
                     onHover = { viewModel.onDragHover(entry.key) },
                     onDrop = { viewModel.onDragCommit() },
-                    onEnded = {
-                        if (viewModel.dragState != null) viewModel.onDragCommit()
-                    },
+                    onEnded = commitIfDragging,
                     modifier = Modifier.animateItem(),
                 )
                 is GridEntry.Item -> WidgetCard(
@@ -129,9 +151,7 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                     onDragStart = { viewModel.onDragStart(entry.widget.id) },
                     onHover = { viewModel.onDragHover(entry.key) },
                     onDrop = { viewModel.onDragCommit() },
-                    onEnded = {
-                        if (viewModel.dragState != null) viewModel.onDragCommit()
-                    },
+                    onEnded = commitIfDragging,
                     onTransfer = { viewModel.onTransfer(entry.widget.id) },
                     modifier = Modifier.animateItem(),
                 )
@@ -140,31 +160,15 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LazyGridItemScope.HeaderCell(
     title: String,
-    headerKey: String,
-    @Suppress("UNUSED_PARAMETER") isDragActive: Boolean,
     onHover: () -> Unit,
     onDrop: () -> Unit,
     onEnded: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val currentOnHover by rememberUpdatedState(onHover)
-    val currentOnDrop by rememberUpdatedState(onDrop)
-    val currentOnEnded by rememberUpdatedState(onEnded)
-
-    val dropTarget = remember(headerKey) {
-        object : DragAndDropTarget {
-            override fun onEntered(event: DragAndDropEvent) { currentOnHover() }
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                currentOnDrop()
-                return true
-            }
-            override fun onEnded(event: DragAndDropEvent) { currentOnEnded() }
-        }
-    }
+    val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
 
     Text(
         text = title,
@@ -174,15 +178,12 @@ private fun LazyGridItemScope.HeaderCell(
             .fillMaxWidth()
             .padding(top = 16.dp, bottom = 4.dp)
             .dragAndDropTarget(
-                shouldStartDragAndDrop = { event ->
-                    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
-                },
+                shouldStartDragAndDrop = ::acceptPlainText,
                 target = dropTarget,
             ),
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LazyGridItemScope.WidgetCard(
     widget: Widget,
@@ -194,24 +195,10 @@ private fun LazyGridItemScope.WidgetCard(
     onTransfer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val currentOnHover by rememberUpdatedState(onHover)
-    val currentOnDrop by rememberUpdatedState(onDrop)
-    val currentOnEnded by rememberUpdatedState(onEnded)
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val widgetId = widget.id
-
     val cardLayer = rememberGraphicsLayer()
-
-    val dropTarget = remember(widgetId) {
-        object : DragAndDropTarget {
-            override fun onEntered(event: DragAndDropEvent) { currentOnHover() }
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                currentOnDrop()
-                return true
-            }
-            override fun onEnded(event: DragAndDropEvent) { currentOnEnded() }
-        }
-    }
+    val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
 
     val minHeight = if (widget.isFullSpan) 120.dp else 96.dp
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
@@ -231,9 +218,7 @@ private fun LazyGridItemScope.WidgetCard(
                 if (!isBeingDragged) drawLayer(cardLayer)
             }
             .dragAndDropTarget(
-                shouldStartDragAndDrop = { event ->
-                    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
-                },
+                shouldStartDragAndDrop = ::acceptPlainText,
                 target = dropTarget,
             )
             .dragAndDropSource(drawDragDecoration = { drawLayer(cardLayer) }) {
@@ -275,7 +260,6 @@ private fun LazyGridItemScope.WidgetCard(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LazyGridItemScope.EmptyDropZone(
     message: String,
@@ -285,20 +269,7 @@ private fun LazyGridItemScope.EmptyDropZone(
     onEnded: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val currentOnHover by rememberUpdatedState(onHover)
-    val currentOnDrop by rememberUpdatedState(onDrop)
-    val currentOnEnded by rememberUpdatedState(onEnded)
-
-    val dropTarget = remember {
-        object : DragAndDropTarget {
-            override fun onEntered(event: DragAndDropEvent) { currentOnHover() }
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                currentOnDrop()
-                return true
-            }
-            override fun onEnded(event: DragAndDropEvent) { currentOnEnded() }
-        }
-    }
+    val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
 
     Card(
         modifier = modifier
@@ -313,9 +284,7 @@ private fun LazyGridItemScope.EmptyDropZone(
                 shape = RoundedCornerShape(12.dp),
             )
             .dragAndDropTarget(
-                shouldStartDragAndDrop = { event ->
-                    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
-                },
+                shouldStartDragAndDrop = ::acceptPlainText,
                 target = dropTarget,
             ),
         shape = RoundedCornerShape(12.dp),

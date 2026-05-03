@@ -127,7 +127,7 @@ class WidgetsViewModel : ViewModel() {
         val currentIndex = indexOfWidget(widgetId)
         val availableHeaderIndex = indexOfKey(AVAILABLE_HEADER_KEY)
         val landedInYours = currentIndex >= 0 &&
-            (availableHeaderIndex < 0 || currentIndex < availableHeaderIndex)
+            (availableHeaderIndex !in 0..currentIndex)
 
         when {
             landedInYours -> {
