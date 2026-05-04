@@ -15,10 +15,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -30,9 +33,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,7 +60,6 @@ import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationExceptio
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 
 private const val LONG_PRESS_TIMEOUT_MS = 200L
 
@@ -86,16 +88,11 @@ private fun rememberDropTarget(
 }
 
 @Composable
-fun WidgetsScreen(viewModel: WidgetsViewModel = viewModel()) {
+fun WidgetsScreen(viewModel: WidgetsViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    when (uiState) {
-        UiState.Loading -> Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator()
-        }
-        UiState.Success -> WidgetsContent(viewModel)
+    when (val state = uiState) {
+        UiState.Loading, UiState.Loaded -> WidgetsContent(viewModel)
+        is UiState.Error -> ErrorScreen(cause = state.cause)
     }
 }
 
@@ -103,8 +100,8 @@ fun WidgetsScreen(viewModel: WidgetsViewModel = viewModel()) {
 private fun WidgetsContent(viewModel: WidgetsViewModel) {
     val entries: List<GridEntry> = viewModel.entries
     val dragState = viewModel.dragState
-    val commitIfDragging: () -> Unit = {
-        if (viewModel.dragState != null) viewModel.onDragCommit()
+    val commitIfDragging: () -> Unit = remember(viewModel) {
+        { if (viewModel.dragState != null) viewModel.onDragCommit() }
     }
 
     LazyVerticalGrid(
@@ -122,12 +119,19 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
             span = { entry ->
                 when (entry) {
                     is GridEntry.Header, is GridEntry.Empty -> GridItemSpan(maxLineSpan)
-                    is GridEntry.Item ->
-                        if (entry.widget.isFullSpan) GridItemSpan(maxLineSpan)
-                        else GridItemSpan(1)
+                    is GridEntry.Cell -> if (cellSize(entry.state) == WidgetSize.FULL) GridItemSpan(maxLineSpan) else GridItemSpan(1)
                 }
             },
-            contentType = { it::class },
+            contentType = { entry ->
+                when (entry) {
+                    is GridEntry.Cell -> when (entry.state) {
+                        is WidgetState.Loaded -> WidgetState.Loaded::class
+                        is WidgetState.Skeleton -> WidgetState.Skeleton::class
+                        is WidgetState.Failure -> WidgetState.Failure::class
+                    }
+                    else -> entry::class
+                }
+            },
         ) { entry ->
             when (entry) {
                 is GridEntry.Header -> HeaderCell(
@@ -145,16 +149,26 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                     onEnded = commitIfDragging,
                     modifier = Modifier.animateItem(),
                 )
-                is GridEntry.Item -> WidgetCard(
-                    widget = entry.widget,
-                    isBeingDragged = dragState?.draggedWidget?.id == entry.widget.id,
-                    onDragStart = { viewModel.onDragStart(entry.widget.id) },
-                    onHover = { viewModel.onDragHover(entry.key) },
-                    onDrop = { viewModel.onDragCommit() },
-                    onEnded = commitIfDragging,
-                    onTransfer = { viewModel.onTransfer(entry.widget.id) },
-                    modifier = Modifier.animateItem(),
-                )
+                is GridEntry.Cell -> when (val s = entry.state) {
+                    is WidgetState.Loaded -> WidgetCard(
+                        state = s,
+                        isBeingDragged = dragState?.draggedWidget?.id == s.id,
+                        onDragStart = { viewModel.onDragStart(s.id) },
+                        onHover = { viewModel.onDragHover(entry.key) },
+                        onDrop = { viewModel.onDragCommit() },
+                        onEnded = commitIfDragging,
+                        onTransfer = { viewModel.onTransfer(s.id) },
+                        modifier = Modifier.animateItem(),
+                    )
+                    is WidgetState.Skeleton -> SkeletonCell(
+                        size = s.size,
+                        modifier = Modifier.animateItem(),
+                    )
+                    is WidgetState.Failure -> FailureCell(
+                        size = s.size,
+                        modifier = Modifier.animateItem(),
+                    )
+                }
             }
         }
     }
@@ -169,7 +183,6 @@ private fun LazyGridItemScope.HeaderCell(
     modifier: Modifier = Modifier,
 ) {
     val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
-
     Text(
         text = title,
         style = MaterialTheme.typography.titleLarge,
@@ -186,7 +199,7 @@ private fun LazyGridItemScope.HeaderCell(
 
 @Composable
 private fun LazyGridItemScope.WidgetCard(
-    widget: Widget,
+    state: WidgetState.Loaded,
     isBeingDragged: Boolean,
     onDragStart: () -> Unit,
     onHover: () -> Unit,
@@ -196,11 +209,11 @@ private fun LazyGridItemScope.WidgetCard(
     modifier: Modifier = Modifier,
 ) {
     val currentOnDragStart by rememberUpdatedState(onDragStart)
-    val widgetId = widget.id
+    val widgetId = state.id
     val cardLayer = rememberGraphicsLayer()
     val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
 
-    val minHeight = if (widget.isFullSpan) 120.dp else 96.dp
+    val minHeight = if (state.size == WidgetSize.FULL) 120.dp else 96.dp
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
     val scale by animateFloatAsState(if (isBeingDragged) 1.05f else 1f, label = "drag-scale")
 
@@ -243,19 +256,66 @@ private fun LazyGridItemScope.WidgetCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = widget.name,
+                text = debugLabel(state),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = onTransfer) {
                 Icon(
-                    imageVector = if (widget.isYours) Icons.Default.Remove else Icons.Default.Add,
-                    contentDescription = if (widget.isYours)
+                    imageVector = if (state.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add,
+                    contentDescription = if (state.isInYourWidgets)
                         "Move to Other widgets"
                     else
                         "Move to Your widgets",
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun LazyGridItemScope.SkeletonCell(
+    size: WidgetSize,
+    modifier: Modifier = Modifier,
+) {
+    val minHeight = if (size == WidgetSize.FULL) 120.dp else 96.dp
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeight),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {}
+}
+
+@Composable
+private fun LazyGridItemScope.FailureCell(
+    size: WidgetSize,
+    modifier: Modifier = Modifier,
+) {
+    val minHeight = if (size == WidgetSize.FULL) 120.dp else 96.dp
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeight)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.error,
+                shape = RoundedCornerShape(12.dp),
+            ),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Failed to load",
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -270,7 +330,6 @@ private fun LazyGridItemScope.EmptyDropZone(
     modifier: Modifier = Modifier,
 ) {
     val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
-
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -300,6 +359,50 @@ private fun LazyGridItemScope.EmptyDropZone(
             )
         }
     }
+}
+
+@Composable
+private fun ErrorScreen(cause: Throwable) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(24.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Couldn't load widgets",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = cause.message ?: cause::class.simpleName.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun cellSize(state: WidgetState): WidgetSize = when (state) {
+    is WidgetState.Loaded -> state.size
+    is WidgetState.Skeleton -> state.size
+    is WidgetState.Failure -> state.size
+}
+
+private fun debugLabel(state: WidgetState.Loaded): String = when (state) {
+    is WidgetState.Loaded.InvestmentEntryPoint -> "Investment · ${state.id}"
+    is WidgetState.Loaded.Pfm -> "PFM · ${state.id}"
+    is WidgetState.Loaded.Tile.Monizze -> "Monizze · ${state.id}"
+    is WidgetState.Loaded.Tile.Cashback -> "Cashback · ${state.id}"
+    is WidgetState.Loaded.Tile.Pluxee -> "Pluxee · ${state.id}"
 }
 
 private suspend fun AwaitPointerEventScope.detectShortLongPress(
