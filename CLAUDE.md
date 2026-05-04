@@ -34,7 +34,7 @@ Use `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` (`androidx.compo
 
 Releasing outside any drop target keeps the widget at its current visual position — it does not snap back to origin. Deviates from the original POC spec ("release outside target = cancel") to eliminate dead-zone gaps between section headers and the first item below them. See `docs/superpowers/specs/2026-04-30-commit-on-release-drag-design.md`.
 
-`WidgetsViewModel.onDragCancel` is retained as unused surface area for a possible future explicit-cancel gesture; do not delete.
+`WidgetsViewModel.onDragCancel` implements the Other→Other revert branch invoked from `onDragCommit` (revert to `originalIndex`). It also stands as public surface area for a possible future explicit-cancel gesture.
 
 ### Section-aware reorder rules
 

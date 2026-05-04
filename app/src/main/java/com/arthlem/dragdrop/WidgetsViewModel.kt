@@ -106,6 +106,9 @@ class WidgetsViewModel(
     }
 
     private fun rebuildEntriesFromWidgets(widgets: List<WidgetState>) {
+        // filterIsInstance: Skeleton/Failure items in a live-flow emission are not yet
+        // produced by any use case path (per spec: out of scope). Drop them until that
+        // path ships — otherwise non-Loaded items would land between the section headers.
         val (yours, other) = widgets
             .filterIsInstance<WidgetState.Loaded>()
             .partition { it.isInYourWidgets }
