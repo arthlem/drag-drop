@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridItemScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -135,38 +134,38 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
         ) { entry ->
             when (entry) {
                 is GridEntry.Header -> HeaderCell(
-                    title = entry.title,
-                    onHover = { viewModel.onDragHover(entry.key) },
-                    onDrop = { viewModel.onDragCommit() },
-                    onEnded = commitIfDragging,
-                    modifier = Modifier.animateItem(),
+	                title = entry.title,
+	                onHover = { viewModel.onDragHover(entry.key) },
+	                onDrop = { viewModel.onDragCommit() },
+	                onEnded = commitIfDragging,
+	                modifier = Modifier.animateItem(),
                 )
                 is GridEntry.Empty -> EmptyDropZone(
-                    message = entry.message,
-                    isDragActive = dragState != null,
-                    onHover = { viewModel.onDragHover(entry.key) },
-                    onDrop = { viewModel.onDragCommit() },
-                    onEnded = commitIfDragging,
-                    modifier = Modifier.animateItem(),
+	                message = entry.message,
+	                isDragActive = dragState != null,
+	                onHover = { viewModel.onDragHover(entry.key) },
+	                onDrop = { viewModel.onDragCommit() },
+	                onEnded = commitIfDragging,
+	                modifier = Modifier.animateItem(),
                 )
                 is GridEntry.Cell -> when (val s = entry.state) {
                     is WidgetState.Loaded -> WidgetCard(
-                        state = s,
-                        isBeingDragged = dragState?.draggedWidget?.id == s.id,
-                        onDragStart = { viewModel.onDragStart(s.id) },
-                        onHover = { viewModel.onDragHover(entry.key) },
-                        onDrop = { viewModel.onDragCommit() },
-                        onEnded = commitIfDragging,
-                        onTransfer = { viewModel.onTransfer(s.id) },
-                        modifier = Modifier.animateItem(),
+	                    state = s,
+	                    isBeingDragged = dragState?.draggedWidget?.id == s.id,
+	                    onDragStart = { viewModel.onDragStart(s.id) },
+	                    onHover = { viewModel.onDragHover(entry.key) },
+	                    onDrop = { viewModel.onDragCommit() },
+	                    onEnded = commitIfDragging,
+	                    onTransfer = { viewModel.onTransfer(s.id) },
+	                    modifier = Modifier.animateItem(),
                     )
                     is WidgetState.Skeleton -> SkeletonCell(
-                        size = s.size,
-                        modifier = Modifier.animateItem(),
+	                    size = s.size,
+	                    modifier = Modifier.animateItem(),
                     )
                     is WidgetState.Failure -> FailureCell(
-                        size = s.size,
-                        modifier = Modifier.animateItem(),
+	                    size = s.size,
+	                    modifier = Modifier.animateItem(),
                     )
                 }
             }
@@ -175,12 +174,12 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
 }
 
 @Composable
-private fun LazyGridItemScope.HeaderCell(
-    title: String,
-    onHover: () -> Unit,
-    onDrop: () -> Unit,
-    onEnded: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun HeaderCell(
+	title: String,
+	onHover: () -> Unit,
+	onDrop: () -> Unit,
+	onEnded: () -> Unit,
+	modifier: Modifier = Modifier,
 ) {
     val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
     Text(
@@ -198,15 +197,15 @@ private fun LazyGridItemScope.HeaderCell(
 }
 
 @Composable
-private fun LazyGridItemScope.WidgetCard(
-    state: WidgetState.Loaded,
-    isBeingDragged: Boolean,
-    onDragStart: () -> Unit,
-    onHover: () -> Unit,
-    onDrop: () -> Unit,
-    onEnded: () -> Unit,
-    onTransfer: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun WidgetCard(
+	state: WidgetState.Loaded,
+	isBeingDragged: Boolean,
+	onDragStart: () -> Unit,
+	onHover: () -> Unit,
+	onDrop: () -> Unit,
+	onEnded: () -> Unit,
+	onTransfer: () -> Unit,
+	modifier: Modifier = Modifier,
 ) {
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val widgetId = state.id
@@ -274,9 +273,9 @@ private fun LazyGridItemScope.WidgetCard(
 }
 
 @Composable
-private fun LazyGridItemScope.SkeletonCell(
-    size: WidgetSize,
-    modifier: Modifier = Modifier,
+private fun SkeletonCell(
+	size: WidgetSize,
+	modifier: Modifier = Modifier,
 ) {
     val minHeight = if (size == WidgetSize.FULL) 120.dp else 96.dp
     Card(
@@ -291,9 +290,9 @@ private fun LazyGridItemScope.SkeletonCell(
 }
 
 @Composable
-private fun LazyGridItemScope.FailureCell(
-    size: WidgetSize,
-    modifier: Modifier = Modifier,
+private fun FailureCell(
+	size: WidgetSize,
+	modifier: Modifier = Modifier,
 ) {
     val minHeight = if (size == WidgetSize.FULL) 120.dp else 96.dp
     Card(
@@ -321,13 +320,13 @@ private fun LazyGridItemScope.FailureCell(
 }
 
 @Composable
-private fun LazyGridItemScope.EmptyDropZone(
-    message: String,
-    isDragActive: Boolean,
-    onHover: () -> Unit,
-    onDrop: () -> Unit,
-    onEnded: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun EmptyDropZone(
+	message: String,
+	isDragActive: Boolean,
+	onHover: () -> Unit,
+	onDrop: () -> Unit,
+	onEnded: () -> Unit,
+	modifier: Modifier = Modifier,
 ) {
     val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
     Card(
