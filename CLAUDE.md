@@ -12,14 +12,19 @@ Use `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` (`androidx.compo
 
 - AGP 9.0.0-beta03, Gradle 9.1.0 (built-in Kotlin support — do **not** apply `org.jetbrains.kotlin.android` plugin, it conflicts with the AGP-provided `kotlin` extension; only `org.jetbrains.kotlin.plugin.compose` is applied).
 - Compose BOM 2025.01.00 (Compose Foundation/UI 1.7.x), Material 3, lifecycle 2.8.7, activity-compose 1.9.3.
+- Arrow Core 1.2.4 (`Either<Throwable, Flow<List<WidgetState>>>` for eligibility-aware data fetching).
 - minSdk 26, targetSdk/compileSdk 36, JVM target 11.
 
 ## Architecture
 
 - **MVVM with strict separation.** `WidgetsViewModel` owns all mutation logic. `WidgetsScreen.kt` composables are pure renderers — they observe state and forward user input via callbacks.
+- **`WidgetsUseCase` is constructor-injected** into the ViewModel via Compose's `viewModelFactory` in `MainActivity`. The interface returns `Either<Throwable, Flow<List<WidgetState>>>` — `Left` is a terminal eligibility-failure state (no flow exists to subscribe to); `Right` is the live widget stream. `FakeWidgetsUseCase` flips a `FAIL_ELIGIBILITY` constant to test the error path.
+- **Sealed `WidgetState` hierarchy.** Three top-level variants: `Skeleton(key, size)`, `Failure(key, size)`, and `Loaded` (a sealed sub-interface with `InvestmentEntryPoint`, `Pfm`, and `Tile.{Monizze, Cashback, Pluxee}`). `Loaded` carries `id` / `size` / `isInYourWidgets` and a polymorphic `toggleIsInYourWidgets(b)` that returns the same concrete subtype — reorder/transfer logic preserves widget type without `when`-branching.
 - **`SnapshotStateList<GridEntry>` as source of truth.** Backed by a private `_entries`; the public view is `List<GridEntry>` (read-only). Compose still observes mutations because the underlying list is `SnapshotStateList`.
-- **Sealed `GridEntry` interface.** Three variants: `Header(key, title)`, `Item(widget)`, `Empty(key, message)`. Each has a stable `key`. `GridEntry.Item.key` derives from `widget.id`.
-- **Single source of truth for `isYours`.** Derived from list position relative to the Available header — never stored independently. `reconcileIsYoursForDraggedWidget` runs after each drag move.
+- **Sealed `GridEntry` interface.** Three variants: `Header(key, title)`, `Cell(state: WidgetState)`, `Empty(key, message)`. `GridEntry.Cell.key` resolves to `state.id` for `Loaded` and to `state.key` for `Skeleton`/`Failure`.
+- **Three-state UI.** `UiState.Loading` (6 skeletons in `_entries`, no headers, no drag), `UiState.Error(cause)` (empty `_entries`, `ErrorScreen` rendered instead of the grid), `UiState.Loaded` (full grid with headers, section partition, drag/drop). `UiState.Loading` and `UiState.Loaded` both render through the same `WidgetsContent` — only the `_entries` contents change.
+- **Single source of truth for `isInYourWidgets`.** Derived from list position relative to the Available header — never stored independently after initial load. `reconcileIsYoursForDraggedWidget` runs after each drag move and uses `current.toggleIsInYourWidgets(...)` to preserve the subtype.
+- **Deferred emissions during drag.** A `pendingEntries: List<WidgetState>?` field stores any flow emission that arrives mid-drag; `onDragCommit` / `onDragCancel` replay it via `flushPendingEntriesIfAny()` so a remote update cannot stomp on an active drag.
 - **Dynamic empty placeholders.** `reconcileEmptyPlaceholders()` strips all `GridEntry.Empty` entries and re-adds them based on section emptiness. Tail-first insertion order keeps the available header's index stable for the second insert without a re-lookup.
 - **Constants for section anchors.** `YOURS_HEADER_KEY` / `AVAILABLE_HEADER_KEY` / `YOURS_EMPTY_KEY` / `AVAILABLE_EMPTY_KEY`.
 
@@ -35,7 +40,7 @@ Releasing outside any drop target keeps the widget at its current visual positio
 
 `onDragCommit` branches based on origin and final position:
 
-| Origin (`originalIsYours`) | Final position | Result |
+| Origin (`originalIsInYourWidgets`) | Final position | Result |
 |---|---|---|
 | Yours | Yours | Reorder in place |
 | Other | Yours | Transfer to that specific Yours position |
@@ -57,7 +62,7 @@ The `+`/`−` button (`onTransfer`) is the only way to programmatically send a w
 
 | Composable | Drop key | Resolution |
 |---|---|---|
-| `WidgetCard` | `widget.id` | Direction-aware insert at target's `entries` index |
+| `WidgetCard` | `state.id` | Direction-aware insert at target's `entries` index |
 | `HeaderCell` (Yours) | `YOURS_HEADER_KEY` | Insert just after the Yours header (start of Yours) |
 | `HeaderCell` (Other) | `AVAILABLE_HEADER_KEY` | Insert at the available header's own index — direction-aware then takes over (drag-down lands end-of-Yours, drag-up lands start-of-Other) |
 | `EmptyDropZone` | `YOURS_EMPTY_KEY` / `AVAILABLE_EMPTY_KEY` | Insert at the placeholder's own index (the placeholder is then stripped by reconcile) |
@@ -112,8 +117,8 @@ Encapsulation rules to keep the public surface clean:
 ### Helpers (private)
 
 - `indexOfKey(key: String): Int` — replaces six former `entries.indexOfFirst { it is GridEntry.Header && it.key == X }` sites. The `is GridEntry.Header` guard was redundant since keys are globally unique across the list.
-- `indexOfWidget(widgetId: String): Int` — type-narrowed lookup for `Item` entries.
-- `widgetAt(index: Int): Widget?` — safe accessor that folds `getOrNull` + `as? GridEntry.Item` + `.widget`.
+- `indexOfLoaded(widgetId: String): Int` — type-narrowed lookup for `Cell` entries holding a `WidgetState.Loaded`.
+- `loadedAt(index: Int): WidgetState.Loaded?` — safe accessor that folds `getOrNull` + `as? GridEntry.Cell` + `state as? WidgetState.Loaded`.
 
 ### Mutation atomicity
 
@@ -121,37 +126,42 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 
 ### Other simplifications
 
-- `INITIAL_WIDGETS.partition { it.isYours }` (single traversal) instead of `filter { … }` + `filterNot { … }`.
+- `FakeWidgetsUseCase.INITIAL_WIDGETS.partition { it.isInYourWidgets }` (single traversal) instead of `filter { … }` + `filterNot { … }`.
 - `_entries.removeAll { it is GridEntry.Empty }` instead of a manual `while (i < size) { if (...) removeAt(i) else i++ }` loop.
-- `onTransfer` collapses both branches into one block: `widget.copy(isYours = !widget.isYours)`, anchor key picked from the new `isYours`, single `removeAt` + `add`.
+- `onTransfer` collapses both branches into one block: `current.toggleIsInYourWidgets(!current.isInYourWidgets)`, anchor key picked from the new `isInYourWidgets`, single `removeAt` + `add`.
 
 ## Composable code organization (`WidgetsScreen.kt`)
 
 - `@file:OptIn(ExperimentalFoundationApi::class)` at the top — promotes the per-function annotations to file-level.
 - Private file-level helpers near the top: `LONG_PRESS_TIMEOUT_MS`, `acceptPlainText(event)`, `rememberDropTarget(onHover, onDrop, onEnded)`.
 - `WidgetsContent` hoists one `commitIfDragging: () -> Unit` lambda, passed to all three `onEnded` call sites.
-- `HeaderCell`, `WidgetCard`, `EmptyDropZone` each call `rememberDropTarget(...)` on one line and pass `::acceptPlainText` to `dragAndDropTarget.shouldStartDragAndDrop`.
+- `HeaderCell`, `WidgetCard`, `SkeletonCell`, `FailureCell`, `EmptyDropZone` each call `rememberDropTarget(...)` on one line and pass `::acceptPlainText` to `dragAndDropTarget.shouldStartDragAndDrop`.
 - `detectShortLongPress` lives at the bottom as a private file-level extension on `AwaitPointerEventScope`.
 
 ## Files
 
-- `app/src/main/java/com/arthlem/dragdrop/MainActivity.kt` — entry point, sets `WidgetsScreen` as content under `MaterialTheme`.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `EmptyDropZone` / `rememberDropTarget` / `acceptPlainText` / `detectShortLongPress`.
+- `app/src/main/java/com/arthlem/dragdrop/MainActivity.kt` — entry point; constructs `WidgetsViewModel` via `viewModelFactory` with `FakeWidgetsUseCase`, hosts `WidgetsScreen` under `MaterialTheme`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` hierarchy (`Skeleton`/`Failure`/`Loaded` with `InvestmentEntryPoint`/`Pfm`/`Tile.{Monizze,Cashback,Pluxee}`).
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsUseCase.kt` — `WidgetsUseCase` interface + `FakeWidgetsUseCase` returning `Either<Throwable, Flow<List<WidgetState>>>`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers, deferred-emission logic, skeleton seed.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `rememberDropTarget` / `acceptPlainText` / `cellSize` / `debugLabel` / `detectShortLongPress`.
 
 ## Initial test data
 
-Five widgets (configured in `WidgetsViewModel.INITIAL_WIDGETS`) intentionally mix spans within both sections to validate mixed-span handling:
+Six widgets configured in `FakeWidgetsUseCase.INITIAL_WIDGETS` cover one of each `Loaded` subtype with mixed spans across both sections, sufficient to exercise all four drag rules:
 
 ```
-w1  "Widget 1"           half-span    Yours
-w2  "Analyse de budget"  full-span    Yours
-w0  "Widget 0"           full-span    Other
-w3  "Widget 2"           half-span    Other
-w4  "Widget 3"           half-span    Other
+m1   Tile.Monizze            small    Yours
+c1   Tile.Cashback           small    Yours
+iep1 InvestmentEntryPoint    full     Yours
+pfm1 Pfm                     full     Other
+p1   Tile.Pluxee             small    Other
+m2   Tile.Monizze            small    Other
 ```
 
-Note the IDs do not match the display names (`w3` is "Widget 2", `w4` is "Widget 3"). Initialization is wrapped in a `viewModelScope.launch { delay(500); … }` to simulate a load — `UiState.Loading` resolves to `UiState.Success` after the delay, with a `CircularProgressIndicator` shown in between.
+A duplicate `Monizze` (`m1` vs `m2`) verifies same-type uniqueness via `id`. Initial render shows 6 skeletons (4 small + 2 full, mirroring the eventual loaded layout) for ~500 ms while the fake eligibility delay completes; the grid then transitions to `UiState.Loaded` with the full data above.
+
+To test the error screen, flip `FakeWidgetsUseCase.FAIL_ELIGIBILITY` to `true` and reinstall.
 
 ## Build
 
