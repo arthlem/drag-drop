@@ -54,9 +54,11 @@ class WidgetsViewModel : ViewModel() {
         private const val LOAD_DELAY_MS = 500L
 
         private val INITIAL_WIDGETS = listOf(
-            Widget("w1", "Widget 1", isFullSpan = false, isYours = true),
+            Widget("w12", "Widget 12", isFullSpan = false, isYours = true),
+	        Widget("w31", "Widget 31", isFullSpan = false, isYours = true),
+	        Widget("w32", "Widget 32", isFullSpan = false, isYours = true),
+	        Widget("w0", "Widget 0", isFullSpan = false, isYours = true),
             Widget("w2", "Analyse de budget", isFullSpan = true, isYours = true),
-            Widget("w0", "Widget 0", isFullSpan = true, isYours = false),
             Widget("w3", "Widget 2", isFullSpan = false, isYours = false),
             Widget("w4", "Widget 3", isFullSpan = false, isYours = false),
         )
