@@ -11,6 +11,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 
+private val widgetsViewModelFactory = viewModelFactory {
+    initializer { WidgetsViewModel(FakeWidgetsUseCase()) }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,11 +24,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    val viewModel: WidgetsViewModel = viewModel(
-                        factory = viewModelFactory {
-                            initializer { WidgetsViewModel(FakeWidgetsUseCase()) }
-                        }
-                    )
+                    val viewModel: WidgetsViewModel = viewModel(factory = widgetsViewModelFactory)
                     WidgetsScreen(viewModel = viewModel)
                 }
             }
