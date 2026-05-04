@@ -135,7 +135,7 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 - `@file:OptIn(ExperimentalFoundationApi::class)` at the top — promotes the per-function annotations to file-level.
 - Private file-level helpers near the top: `LONG_PRESS_TIMEOUT_MS`, `acceptPlainText(event)`, `rememberDropTarget(onHover, onDrop, onEnded)`.
 - `WidgetsContent` hoists one `commitIfDragging: () -> Unit` lambda, passed to all three `onEnded` call sites.
-- `HeaderCell`, `WidgetCard`, `SkeletonCell`, `FailureCell`, `EmptyDropZone` each call `rememberDropTarget(...)` on one line and pass `::acceptPlainText` to `dragAndDropTarget.shouldStartDragAndDrop`.
+- `HeaderCell`, `WidgetCard`, `EmptyDropZone` each call `rememberDropTarget(...)` on one line and pass `::acceptPlainText` to `dragAndDropTarget.shouldStartDragAndDrop`. `SkeletonCell` and `FailureCell` render only — no drag modifiers.
 - `detectShortLongPress` lives at the bottom as a private file-level extension on `AwaitPointerEventScope`.
 
 ## Files
