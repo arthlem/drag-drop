@@ -12,6 +12,7 @@ import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,10 +41,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +66,8 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -113,15 +121,30 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
         { if (viewModel.dragState != null) viewModel.onDragCommit() }
     }
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    val dragBounds: SnapshotStateMap<String, Rect> = remember { mutableStateMapOf() }
+    val pressOffsetWithinCell: MutableState<Offset> = remember { mutableStateOf(Offset.Zero) }
+    val fingerInWindow: MutableState<Offset?> = remember { mutableStateOf(null) }
+    val draggingWidget: MutableState<GenericWidget?> = remember { mutableStateOf(null) }
+    var boxCoords: LayoutCoordinates? by remember { mutableStateOf(null) }
+    val lazyGridState = rememberLazyGridState()
+    val edgeAutoScroll = rememberEdgeAutoScroll(lazyGridState)
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .systemGestureExclusion(),
+            .onGloballyPositioned { coords -> boxCoords = coords },
     ) {
+        LazyVerticalGrid(
+            state = lazyGridState,
+            columns = GridCells.Fixed(2),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .systemGestureExclusion()
+                .onGloballyPositioned { coords -> edgeAutoScroll.bindGridBounds(coords) },
+        ) {
         items(
             items = entries,
             key = { it.key },
@@ -179,6 +202,7 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                     )
                 }
             }
+        }
         }
     }
 }
