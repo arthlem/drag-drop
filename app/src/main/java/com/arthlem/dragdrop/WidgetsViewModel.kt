@@ -152,7 +152,7 @@ class WidgetsViewModel(
             val current = loadedAt(currentIndex) ?: return@withMutableSnapshot
             _entries.removeAt(currentIndex)
             val safeIndex = targetIndex.coerceIn(0, _entries.size)
-            _entries.add(safeIndex, GridEntry.Cell(WidgetState.Loaded(current)))
+            _entries.add(safeIndex, cellOf(current))
             reconcileIsYoursForDraggedWidget(widgetId)
             reconcileEmptyPlaceholders()
         }
@@ -179,7 +179,7 @@ class WidgetsViewModel(
                     val target = (if (anchorIndex < 0) _entries.size else anchorIndex + 1)
                         .coerceIn(0, _entries.size)
                     val moved = state.draggedWidget.toggleIsInYourWidgets(false)
-                    _entries.add(target, GridEntry.Cell(WidgetState.Loaded(moved)))
+                    _entries.add(target, cellOf(moved))
                     _dragState.value = null
                     reconcileEmptyPlaceholders()
                 }
@@ -201,7 +201,7 @@ class WidgetsViewModel(
             if (currentIndex >= 0) _entries.removeAt(currentIndex)
             val restored = state.draggedWidget.toggleIsInYourWidgets(state.originalIsInYourWidgets)
             val safeOriginal = state.originalIndex.coerceIn(0, _entries.size)
-            _entries.add(safeOriginal, GridEntry.Cell(WidgetState.Loaded(restored)))
+            _entries.add(safeOriginal, cellOf(restored))
             _dragState.value = null
             reconcileEmptyPlaceholders()
         }
@@ -218,7 +218,7 @@ class WidgetsViewModel(
             val anchor = indexOfKey(anchorKey)
             val target = (if (anchor < 0) _entries.size else anchor + 1)
                 .coerceIn(0, _entries.size)
-            _entries.add(target, GridEntry.Cell(WidgetState.Loaded(moved)))
+            _entries.add(target, cellOf(moved))
             reconcileEmptyPlaceholders()
         }
     }
@@ -239,13 +239,16 @@ class WidgetsViewModel(
     private fun loadedAt(index: Int): GenericWidget? =
         ((_entries.getOrNull(index) as? GridEntry.Cell)?.state as? WidgetState.Loaded)?.widget
 
+    private fun cellOf(widget: GenericWidget): GridEntry.Cell =
+        GridEntry.Cell(WidgetState.Loaded(widget))
+
     private fun reconcileIsYoursForDraggedWidget(widgetId: String) {
         val index = indexOfLoaded(widgetId)
         val current = loadedAt(index) ?: return
         val availableHeaderIndex = indexOfKey(AVAILABLE_HEADER_KEY)
         val shouldBeInYourWidgets = availableHeaderIndex < 0 || index < availableHeaderIndex
         if (current.isInYourWidgets != shouldBeInYourWidgets) {
-            _entries[index] = GridEntry.Cell(WidgetState.Loaded(current.toggleIsInYourWidgets(shouldBeInYourWidgets)))
+            _entries[index] = cellOf(current.toggleIsInYourWidgets(shouldBeInYourWidgets))
         }
     }
 
