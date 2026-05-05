@@ -10,8 +10,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,13 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
-import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-
-private const val LONG_PRESS_TIMEOUT_MS = 200L
 
 private fun acceptPlainText(event: DragAndDropEvent): Boolean =
     event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
@@ -233,19 +226,15 @@ private fun WidgetCard(
                 shouldStartDragAndDrop = ::acceptPlainText,
                 target = dropTarget,
             )
-            .dragAndDropSource(drawDragDecoration = { drawLayer(cardLayer) }) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    if (detectShortLongPress(down.id, LONG_PRESS_TIMEOUT_MS)) {
-                        currentOnDragStart()
-                        startTransfer(
-                            DragAndDropTransferData(
-                                ClipData.newPlainText("widgetId", widgetId),
-                            )
-                        )
-                    }
-                }
-            },
+            .dragAndDropSource(
+                drawDragDecoration = { drawLayer(cardLayer) },
+                transferData = { _ ->
+                    currentOnDragStart()
+                    DragAndDropTransferData(
+                        ClipData.newPlainText("widgetId", widgetId),
+                    )
+                },
+            ),
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(
@@ -404,22 +393,3 @@ private fun debugLabel(widget: GenericWidget): String = when (widget) {
     is GenericWidget.Tile.Pluxee -> "Pluxee · ${widget.id}"
 }
 
-private suspend fun AwaitPointerEventScope.detectShortLongPress(
-    pointerId: PointerId,
-    timeoutMs: Long,
-): Boolean {
-    return try {
-        withTimeout(timeoutMs) {
-            while (true) {
-                val event = awaitPointerEvent()
-                val change = event.changes.firstOrNull { it.id == pointerId }
-                if (change != null && !change.pressed) {
-                    return@withTimeout false
-                }
-            }
-            @Suppress("UNREACHABLE_CODE") false
-        }
-    } catch (_: PointerEventTimeoutCancellationException) {
-        true
-    }
-}

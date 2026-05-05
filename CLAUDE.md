@@ -11,7 +11,7 @@ Use `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` (`androidx.compo
 ## Stack
 
 - AGP 9.0.0-beta03, Gradle 9.1.0 (built-in Kotlin support — do **not** apply `org.jetbrains.kotlin.android` plugin, it conflicts with the AGP-provided `kotlin` extension; only `org.jetbrains.kotlin.plugin.compose` is applied).
-- Compose BOM 2025.01.00 (Compose Foundation/UI 1.7.x), Material 3, lifecycle 2.8.7, activity-compose 1.9.3.
+- Compose BOM 2026.04.01 (Compose Foundation/UI 1.11.0, Material 3 1.4.0), lifecycle 2.8.7, activity-compose 1.9.3.
 - Arrow Core 1.2.4 (`Either<Throwable, Flow<List<WidgetState>>>` for eligibility-aware data fetching).
 - minSdk 26, targetSdk/compileSdk 36, JVM target 11.
 
@@ -99,9 +99,11 @@ Reorderable bypasses native D&D entirely — pure `Modifier.pointerInput` from `
 
 ## Long-press detection
 
-Custom `detectShortLongPress(pointerId, timeoutMs)` extension on `AwaitPointerEventScope` (`LONG_PRESS_TIMEOUT_MS = 200L`). Replaces `awaitLongPressOrCancellation` because that function uses the platform default (`viewConfiguration.longPressTimeoutMillis` ≈ 500 ms) with no override.
+Compose Foundation 1.11's `Modifier.dragAndDropSource` drives long-press detection internally — the framework starts the drag at the platform default long-press timeout (`viewConfiguration.longPressTimeoutMillis`, ≈ 500 ms on Android). The app supplies only a `transferData: (Offset) -> DragAndDropTransferData?` lambda; returning non-null starts the drag, returning null refuses.
 
-**Important gotcha:** the function uses `withTimeout(...)` which inside an `AwaitPointerEventScope` resolves to the scope's *own* `withTimeout` member (not `kotlinx.coroutines.withTimeout`) and throws `PointerEventTimeoutCancellationException`, **not** `kotlinx.coroutines.TimeoutCancellationException`. They're sibling subclasses of `CancellationException`. Catching the wrong one lets the exception propagate, cancels the `dragAndDropSource` coroutine, and `startTransfer` never fires.
+Earlier versions (Compose Foundation ≤ 1.7) exposed a trailing block where `awaitEachGesture { ... }` could detect a custom long-press timing and call `startTransfer` manually. That overload was removed; the public `detectDragStart` parameter is not yet exposed (the source has a `TODO: Expose this as public argument`). When/if it lands, this project can re-introduce a 200 ms detector via the same approach.
+
+For now, drag latency is whatever the platform default decides. If a snappier feel is required before the public API lands, the alternative is to abandon `dragAndDropSource` entirely and roll a `pointerInput`-based reorderer (the trade-off discussed in the *Drag visualization > Reorderable comparison* section).
 
 ## Edge gesture handling
 
@@ -135,10 +137,9 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 ## Composable code organization (`WidgetsScreen.kt`)
 
 - `@file:OptIn(ExperimentalFoundationApi::class)` at the top — promotes the per-function annotations to file-level.
-- Private file-level helpers near the top: `LONG_PRESS_TIMEOUT_MS`, `acceptPlainText(event)`, `rememberDropTarget(onHover, onDrop, onEnded)`.
+- Private file-level helpers near the top: `acceptPlainText(event)`, `rememberDropTarget(onHover, onDrop, onEnded)`.
 - `WidgetsContent` hoists one `commitIfDragging: () -> Unit` lambda, passed to all three `onEnded` call sites.
 - `HeaderCell`, `WidgetCard`, `EmptyDropZone` each call `rememberDropTarget(...)` on one line and pass `::acceptPlainText` to `dragAndDropTarget.shouldStartDragAndDrop`. `SkeletonCell` and `FailureCell` render only — no drag modifiers.
-- `detectShortLongPress` lives at the bottom as a private file-level extension on `AwaitPointerEventScope`.
 
 ## Files
 
@@ -147,7 +148,7 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 - `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` (`Skeleton`/`Failure`/`Loaded(widget: GenericWidget)`).
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsUseCase.kt` — `WidgetsUseCase` interface + `FakeWidgetsUseCase` returning `Either<Throwable, Flow<List<WidgetState>>>`.
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers, deferred-emission logic, skeleton seed.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `rememberDropTarget` / `acceptPlainText` / `cellSize` / `debugLabel` / `detectShortLongPress`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `rememberDropTarget` / `acceptPlainText` / `cellSize` / `debugLabel`.
 
 ## Initial test data
 
