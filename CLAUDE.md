@@ -2,11 +2,11 @@
 
 Proof-of-concept Android app: a draggable widget dashboard with two sections ("Your widgets" / "Other widgets") supporting reorder, cross-section transfer (drag or button), and mixed-span items inside a single `LazyVerticalGrid`.
 
-## Hard constraint: native Compose drag-and-drop only
+## Hard constraint: no third-party reorder libraries
 
-Use `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` (`androidx.compose.foundation.draganddrop.*`).
+**Do NOT introduce `Calvin-LL/Reorderable` or any other third-party reordering library.** A confirmed library bug ([Calvin-LL/Reorderable#93](https://github.com/Calvin-LL/Reorderable/issues/93)) causes flicker on mixed-span items in `LazyVerticalGrid`.
 
-**Do NOT introduce `Calvin-LL/Reorderable` or any other third-party reordering library.** A confirmed library bug ([Calvin-LL/Reorderable#93](https://github.com/Calvin-LL/Reorderable/issues/93)) causes flicker on mixed-span items in `LazyVerticalGrid`. Native Compose D&D avoids it because target detection is independent of item geometry.
+The drag pipeline is built directly on Compose Foundation primitives — `Modifier.pointerInput`, `awaitEachGesture`, `awaitFirstDown`, `awaitPointerEvent`, `withTimeoutOrNull`, `Modifier.onGloballyPositioned`, and `LazyGridState.scrollBy`. Native `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` were used previously but were replaced because Compose Foundation 1.11 does not yet expose a public custom long-press detector (`detectDragStart` is `internal` with a `TODO: Expose this as public argument`), and because animations / touch-center fidelity / continuous source tracking are easier to control directly. Either path is acceptable as long as we own the geometry math.
 
 ## Stack
 
@@ -26,6 +26,8 @@ Use `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` (`androidx.compo
 - **Three-state UI.** `UiState.Loading` (6 skeletons in `_entries`, no headers, no drag), `UiState.Error(cause)` (empty `_entries`, `ErrorScreen` rendered instead of the grid), `UiState.Loaded` (full grid with headers, section partition, drag/drop). `UiState.Loading` and `UiState.Loaded` both render through the same `WidgetsContent` — only the `_entries` contents change.
 - **Single source of truth for `isInYourWidgets`.** Derived from list position relative to the Available header — never stored independently after initial load. `reconcileIsYoursForDraggedWidget` runs after each drag move and uses `current.toggleIsInYourWidgets(...)` to preserve the subtype.
 - **Deferred emissions during drag.** A `pendingEntries: List<WidgetState>?` field stores any flow emission that arrives mid-drag; `onDragCommit` / `onDragCancel` replay it via `flushPendingEntriesIfAny()` so a remote update cannot stomp on an active drag.
+- **Drag pipeline is `pointerInput`-based.** A per-`WidgetCard` `Modifier.pointerInput` runs a custom 200 ms long-press detector (`withTimeoutOrNull(LONG_PRESS_TIMEOUT_MS)`), captures the press offset within the cell, then drives the drag through release. Drop targets register `boundsInWindow()` into a screen-level `dragBounds: SnapshotStateMap<String, Rect>` via `Modifier.bindBounds(key, dragBounds)`. The dragging cell hit-tests against this map on every pointer event and calls `viewModel.onDragHover(targetKey)`. The source slot stays at its `_entries` index with `Modifier.alpha(0f)`; a sibling `Box` overlay renders a `FloatingWidgetCard` that follows the finger using window-coord math (`floatingPos = finger − pressOffsetWithinCell − boxOrigin`).
+- **Edge auto-scroll.** An `EdgeAutoScroll` helper drives `LazyGridState.scrollBy(velocity)` while the dragging finger sits within an 80 dp band at the top or bottom of the grid. Velocity ramps linearly from 0 at the band's outer edge to ~12 px/frame (~720 px/sec at 60 fps) at the screen edge. Stops on release / coroutine cancel.
 - **Dynamic empty placeholders.** `reconcileEmptyPlaceholders()` strips all `GridEntry.Empty` entries and re-adds them based on section emptiness. Tail-first insertion order keeps the available header's index stable for the second insert without a re-lookup.
 - **Constants for section anchors.** `YOURS_HEADER_KEY` / `AVAILABLE_HEADER_KEY` / `YOURS_EMPTY_KEY` / `AVAILABLE_EMPTY_KEY`.
 
@@ -61,49 +63,49 @@ The `+`/`−` button (`onTransfer`) is the only way to programmatically send a w
 
 ## Drop targets
 
-| Composable | Drop key | Resolution |
+| Composable | Bounds key | Resolution |
 |---|---|---|
-| `WidgetCard` | `state.widget.id` | Direction-aware insert at target's `entries` index |
+| `WidgetCard` | `widget.id` | Direction-aware insert at target's `entries` index |
 | `HeaderCell` (Yours) | `YOURS_HEADER_KEY` | Insert just after the Yours header (start of Yours) |
 | `HeaderCell` (Other) | `AVAILABLE_HEADER_KEY` | Insert at the available header's own index — direction-aware then takes over (drag-down lands end-of-Yours, drag-up lands start-of-Other) |
 | `EmptyDropZone` | `YOURS_EMPTY_KEY` / `AVAILABLE_EMPTY_KEY` | Insert at the placeholder's own index (the placeholder is then stripped by reconcile) |
 
-All four target types share the same drop-handler shape via the `rememberDropTarget(onHover, onDrop, onEnded): DragAndDropTarget` helper at the top of `WidgetsScreen.kt`. `shouldStartDragAndDrop` is `::acceptPlainText` everywhere — the predicate is hoisted to a private file-level function.
+Each target attaches `Modifier.bindBounds(key, dragBounds)` — a `@Composable` `Modifier` extension that combines `onGloballyPositioned` (writes `coords.boundsInWindow()` into the `dragBounds` map) with `DisposableEffect` cleanup (`onDispose { dragBounds.remove(key) }`). The dragging cell's `pointerInput` calls `hitTest(finger, dragBounds, draggedKey)` on every pointer event and invokes `viewModel.onDragHover(matchedKey)` when a non-self target is under the finger. `SkeletonCell` and `FailureCell` deliberately do not register — they're not drop participants.
 
 ## Drag visualization
 
-Currently uses the **system drag shadow** approach via a graphics-layer snapshot:
+Inline floating overlay — no system drag shadow, no `dragAndDropSource` / `drawDragDecoration`.
 
-- `cardLayer = rememberGraphicsLayer()` per `WidgetCard`.
-- `Modifier.drawWithContent { cardLayer.record { drawContent() }; if (!isBeingDragged) drawLayer(cardLayer) }` records the card's drawing into the layer every frame and skips drawing it to the canvas when the card is being dragged → source slot is invisible during drag.
-- `dragAndDropSource(drawDragDecoration = { drawLayer(cardLayer) })` — the system's drag shadow renders the recorded layer, smoothly following the finger.
-- `Modifier.graphicsLayer { scaleX/Y = scale }` and `Card(elevation = animateDpAsState(...))` provide the lift animation on the source slot before it goes invisible / after it reappears.
+- **Source slot invisible.** While `isBeingDragged`, `WidgetCard` applies `Modifier.alpha(0f)`. The slot still occupies layout space so adjacent cells reflow correctly via `Modifier.animateItem()`.
+- **Floating overlay.** Inside `WidgetsContent`'s outer `Box`, a sibling renders `FloatingWidgetCard(widget = draggingWidget.value)` when `fingerInWindow.value != null`. Its position is computed in window coords: `floatingTopLeft = fingerInWindow − pressOffsetWithinCell − boxOriginInWindow`. The result is converted to local coords by subtracting the outer Box's `positionInWindow()` and applied via `Modifier.offset { IntOffset(x, y) }`. `Modifier.zIndex(1f)` ensures it paints above the grid.
+- **Lift animation.** `FloatingWidgetCard` uses `LaunchedEffect(Unit) { lifted = true }` to flip `lifted` from false to true on first composition. `animateDpAsState` and `animateFloatAsState` then animate elevation from 0.dp to 4.dp and scale from 1f to 1.05f over the standard tween. Because the floating cell mounts fresh when `draggingWidget` becomes non-null, the lift is actually visible during drag — no snapshot-time freeze.
 
-### Known limitations of this approach (Compose D&D, not us)
+The `WidgetCard` itself also runs `animateDpAsState` / `animateFloatAsState` on its source slot, but those are mostly cosmetic now that the slot is alpha-0 during drag. They animate the slot back to 1f / 0.dp on release (a brief flicker as the cell reappears at its final position).
 
-Documented because they keep coming up:
+### What's no longer needed
 
-1. **Touch-center glitch.** Android's `View.DragShadowBuilder.onProvideShadowMetrics(outShadowSize, outShadowTouchPoint)` controls where the touch anchors on the shadow bitmap. Compose's `dragAndDropSource` constructs the builder internally with the touch point hardcoded to the source's center; neither `DragAndDropTransferData` nor the `drawDragDecoration` lambda exposes an override. So the shadow visually jumps from the press point to centered-on-finger when the drag starts.
-2. **Snapshot is captured at `startTransfer` time.** `animateDpAsState` / `animateFloatAsState` haven't progressed by the time the snapshot is taken, so animated `scale` and `elevation` won't show up in the drag shadow itself unless applied at draw-time inside `drawDragDecoration` (e.g., `scale(1.05f) { drawLayer(cardLayer) }`) or the source is forced to redraw with the new state via a `withFrameNanos { }` between `onDragStart` and `startTransfer`.
-3. **Source can't track the finger continuously after `startTransfer`.** The system owns input once the drag begins; `dragAndDropSource`'s gesture coroutine doesn't see further pointer events on the source. The only way to get continuous pointer position during a system drag is via a wrapping `dragAndDropTarget.onMoved` over the grid (which works but adds complexity — see below).
-
-### Reorderable comparison (informational)
-
-Reorderable bypasses native D&D entirely — pure `Modifier.pointerInput` from `down` through `up`, applying `Modifier.offset` to the source by `pointerCurrent - pointerDown` so the press point stays under the finger. That's why it has none of these three limitations, and also why it can't do cross-app/cross-window drops. The Reorderable bug we're avoiding is in its mixed-span geometry math, not its touch-tracking approach — a from-scratch `pointerInput` reorderer in this project could in principle have both, at the cost of abandoning the spec's native-D&D constraint.
-
-### What was tried and reverted
-
-- **Source-visible-only mode** (no `cardLayer`, source slot stays drawn during drag, no system shadow): user feedback "feels limited" — slot only moves at target boundaries, not continuously with the finger.
-- **Wrapping `dragAndDropTarget` + offset translation on the source** (recover smooth follow on top of native D&D): user feedback "now it lags a lot" because every `WidgetCard` was reading `pointerInRoot` as a regular parameter, recomposing on every `onMoved` tick.
-- **Same as above, plus `State<Offset?>` deferred-read parameter** so only `Modifier.graphicsLayer { … }` re-evaluates per pointer tick (no recomposition cascade): user reverted this and the previous attempts; we kept only the simplify-skill refactors.
+- `cardLayer = rememberGraphicsLayer()`, `Modifier.drawWithContent { record + skip }`, `dragAndDropSource(drawDragDecoration = { drawLayer(cardLayer) })` — all gone. The `drawDragDecoration` lambda was the only mechanism the system drag shadow had to render the source's content; with the floating overlay drawing fresh, no snapshot is needed.
 
 ## Long-press detection
 
-Compose Foundation 1.11's `Modifier.dragAndDropSource` drives long-press detection internally — the framework starts the drag at the platform default long-press timeout (`viewConfiguration.longPressTimeoutMillis`, ≈ 500 ms on Android). The app supplies only a `transferData: (Offset) -> DragAndDropTransferData?` lambda; returning non-null starts the drag, returning null refuses.
+Custom 200 ms threshold via `withTimeoutOrNull(LONG_PRESS_TIMEOUT_MS)` inside the `WidgetCard` `pointerInput` coroutine:
 
-Earlier versions (Compose Foundation ≤ 1.7) exposed a trailing block where `awaitEachGesture { ... }` could detect a custom long-press timing and call `startTransfer` manually. That overload was removed; the public `detectDragStart` parameter is not yet exposed (the source has a `TODO: Expose this as public argument`). When/if it lands, this project can re-introduce a 200 ms detector via the same approach.
+```kotlin
+val longPressed = withTimeoutOrNull(LONG_PRESS_TIMEOUT_MS) {
+    while (true) {
+        val ev = awaitPointerEvent()
+        val change = ev.changes.firstOrNull { it.id == down.id }
+        if (change != null && !change.pressed) return@withTimeoutOrNull false
+    }
+    @Suppress("UNREACHABLE_CODE") true
+} ?: true
+```
 
-For now, drag latency is whatever the platform default decides. If a snappier feel is required before the public API lands, the alternative is to abandon `dragAndDropSource` entirely and roll a `pointerInput`-based reorderer (the trade-off discussed in the *Drag visualization > Reorderable comparison* section).
+`withTimeoutOrNull` returns `null` when the timeout fires — that case `?: true` succeeds and the drag begins. If the user lifts before the timeout, the inner block returns `false`, the outer expression is `false`, and the drag never starts.
+
+`LONG_PRESS_TIMEOUT_MS = 200L` is at file level. Tune freely.
+
+This restores the snappier feel that Compose Foundation 1.11's `dragAndDropSource` does not offer — its `detectDragStart` is `internal` (with a `TODO: Expose this as public argument`), so the only timing was the platform default `viewConfiguration.longPressTimeoutMillis` (≈ 500 ms).
 
 ## Edge gesture handling
 
@@ -137,9 +139,14 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 ## Composable code organization (`WidgetsScreen.kt`)
 
 - `@file:OptIn(ExperimentalFoundationApi::class)` at the top — promotes the per-function annotations to file-level.
-- Private file-level helpers near the top: `acceptPlainText(event)`, `rememberDropTarget(onHover, onDrop, onEnded)`.
-- `WidgetsContent` hoists one `commitIfDragging: () -> Unit` lambda, passed to all three `onEnded` call sites.
-- `HeaderCell`, `WidgetCard`, `EmptyDropZone` each call `rememberDropTarget(...)` on one line and pass `::acceptPlainText` to `dragAndDropTarget.shouldStartDragAndDrop`. `SkeletonCell` and `FailureCell` render only — no drag modifiers.
+- File-level constants: `LONG_PRESS_TIMEOUT_MS`.
+- File-level helpers: `hitTest(finger, bounds, draggedKey)`, `cellSize(state)`, `debugLabel(widget)`, `bindBounds(key, dragBounds)` (a `@Composable Modifier` extension), `rememberEdgeAutoScroll(lazyGridState)`, plus the `EdgeAutoScroll` private class.
+- `WidgetsContent` owns: `dragBounds`, `pressOffsetWithinCell`, `fingerInWindow`, `draggingWidget`, `boxCoords`, `lazyGridState`, `edgeAutoScroll`. It wraps the `LazyVerticalGrid` in an outer `Box` and renders the floating overlay as a sibling.
+- `HeaderCell`, `EmptyDropZone` are pure renderers — bounds registration happens via the `bindBounds` modifier on the call site, not inside the cell.
+- `WidgetCard` owns the gesture pipeline: a single `Modifier.pointerInput(widget.id)` runs the long-press detector, captures press state, drives drag through release, and stops auto-scroll in its `finally` block. Source-slot invisibility is `Modifier.alpha(if (isBeingDragged) 0f else 1f)`.
+- `FloatingWidgetCard` is a non-interactive renderer used only by the floating overlay.
+- `SkeletonCell`, `FailureCell` are render-only (no drag, no bounds registration).
+- `ErrorScreen` renders the `UiState.Error` branch.
 
 ## Files
 
@@ -148,7 +155,7 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 - `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` (`Skeleton`/`Failure`/`Loaded(widget: GenericWidget)`).
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsUseCase.kt` — `WidgetsUseCase` interface + `FakeWidgetsUseCase` returning `Either<Throwable, Flow<List<WidgetState>>>`.
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers, deferred-emission logic, skeleton seed.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `rememberDropTarget` / `acceptPlainText` / `cellSize` / `debugLabel`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `FloatingWidgetCard` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `bindBounds` / `cellSize` / `debugLabel` / `hitTest` / `rememberEdgeAutoScroll` / `EdgeAutoScroll`.
 
 ## Initial test data
 
