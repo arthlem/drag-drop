@@ -10,6 +10,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,7 +42,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropEvent
@@ -48,12 +52,25 @@ import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.draganddrop.mimeTypes
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+private const val LONG_PRESS_TIMEOUT_MS = 200L
 
 private fun acceptPlainText(event: DragAndDropEvent): Boolean =
     event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
@@ -385,6 +402,14 @@ private fun cellSize(state: WidgetState): WidgetSize = when (state) {
     is WidgetState.Failure -> state.size
 }
 
+private fun hitTest(
+    finger: Offset,
+    bounds: Map<String, Rect>,
+    draggedKey: String,
+): String? = bounds.entries.firstOrNull { (key, rect) ->
+    key != draggedKey && rect.contains(finger)
+}?.key
+
 private fun debugLabel(widget: GenericWidget): String = when (widget) {
     is GenericWidget.InvestmentEntryPoint -> "Investment · ${widget.id}"
     is GenericWidget.Pfm -> "PFM · ${widget.id}"
@@ -393,3 +418,62 @@ private fun debugLabel(widget: GenericWidget): String = when (widget) {
     is GenericWidget.Tile.Pluxee -> "Pluxee · ${widget.id}"
 }
 
+@Composable
+private fun rememberEdgeAutoScroll(
+    lazyGridState: LazyGridState,
+    bandHeightDp: Dp = 80.dp,
+): EdgeAutoScroll {
+    val scope = rememberCoroutineScope()
+    val band = with(LocalDensity.current) { bandHeightDp.toPx() }
+    return remember(lazyGridState, band, scope) {
+        EdgeAutoScroll(lazyGridState, scope, band)
+    }
+}
+
+private class EdgeAutoScroll(
+    private val state: LazyGridState,
+    private val scope: CoroutineScope,
+    private val bandPx: Float,
+) {
+    private var gridTopInWindow: Float = 0f
+    private var gridBottomInWindow: Float = 0f
+    private var job: Job? = null
+    private var currentVelocity: Float = 0f
+
+    fun bindGridBounds(coords: LayoutCoordinates) {
+        val rect = coords.boundsInWindow()
+        gridTopInWindow = rect.top
+        gridBottomInWindow = rect.bottom
+    }
+
+    fun update(fingerY: Float) {
+        val velocity = when {
+            fingerY < gridTopInWindow + bandPx ->
+                -lerp(MAX_PX_PER_FRAME, 0f, ((fingerY - gridTopInWindow) / bandPx).coerceIn(0f, 1f))
+            fingerY > gridBottomInWindow - bandPx ->
+                lerp(0f, MAX_PX_PER_FRAME, ((fingerY - (gridBottomInWindow - bandPx)) / bandPx).coerceIn(0f, 1f))
+            else -> 0f
+        }
+        if (velocity == 0f) {
+            stop()
+            return
+        }
+        currentVelocity = velocity
+        if (job?.isActive == true) return
+        job = scope.launch {
+            while (isActive) {
+                state.scrollBy(currentVelocity)
+                withFrameNanos { /* tick */ }
+            }
+        }
+    }
+
+    fun stop() {
+        job?.cancel()
+        job = null
+    }
+
+    companion object {
+        private const val MAX_PX_PER_FRAME = 12f
+    }
+}
