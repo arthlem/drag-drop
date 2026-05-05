@@ -10,8 +10,18 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.roundToInt
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
@@ -188,16 +198,20 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                 )
                 is GridEntry.Cell -> when (val s = entry.state) {
                     is WidgetState.Loaded -> WidgetCard(
-	                    widget = s.widget,
-	                    isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
-	                    onDragStart = { viewModel.onDragStart(s.widget.id) },
-	                    onHover = { viewModel.onDragHover(entry.key) },
-	                    onDrop = { viewModel.onDragCommit() },
-	                    onEnded = commitIfDragging,
-	                    onTransfer = { viewModel.onTransfer(s.widget.id) },
-	                    modifier = Modifier
-	                        .animateItem()
-	                        .bindBounds(s.widget.id, dragBounds),
+                        widget = s.widget,
+                        isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
+                        dragBounds = dragBounds,
+                        pressOffsetWithinCell = pressOffsetWithinCell,
+                        fingerInWindow = fingerInWindow,
+                        draggingWidget = draggingWidget,
+                        edgeAutoScroll = edgeAutoScroll,
+                        onDragStart = { viewModel.onDragStart(it) },
+                        onDragHover = { viewModel.onDragHover(it) },
+                        onDragCommit = { viewModel.onDragCommit() },
+                        onTransfer = { viewModel.onTransfer(s.widget.id) },
+                        modifier = Modifier
+                            .animateItem()
+                            .bindBounds(s.widget.id, dragBounds),
                     )
                     is WidgetState.Skeleton -> SkeletonCell(
 	                    size = s.size,
@@ -210,6 +224,20 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                 }
             }
         }
+        }
+
+        val finger = fingerInWindow.value
+        val widget = draggingWidget.value
+        if (finger != null && widget != null) {
+            val boxOriginInWindow = boxCoords?.positionInWindow() ?: Offset.Zero
+            val floatingTopLeft = finger - pressOffsetWithinCell.value - boxOriginInWindow
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(floatingTopLeft.x.roundToInt(), floatingTopLeft.y.roundToInt()) }
+                    .zIndex(1f),
+            ) {
+                FloatingWidgetCard(widget = widget)
+            }
         }
     }
 }
@@ -234,18 +262,25 @@ private fun HeaderCell(
 
 @Composable
 private fun WidgetCard(
-	widget: GenericWidget,
-	isBeingDragged: Boolean,
-	onDragStart: () -> Unit,
-	onHover: () -> Unit,
-	onDrop: () -> Unit,
-	onEnded: () -> Unit,
-	onTransfer: () -> Unit,
-	modifier: Modifier = Modifier,
+    widget: GenericWidget,
+    isBeingDragged: Boolean,
+    dragBounds: SnapshotStateMap<String, Rect>,
+    pressOffsetWithinCell: MutableState<Offset>,
+    fingerInWindow: MutableState<Offset?>,
+    draggingWidget: MutableState<GenericWidget?>,
+    edgeAutoScroll: EdgeAutoScroll,
+    onDragStart: (String) -> Unit,
+    onDragHover: (String) -> Unit,
+    onDragCommit: () -> Unit,
+    onTransfer: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val currentOnDragStart by rememberUpdatedState(onDragStart)
     val widgetId = widget.id
-    val cardLayer = rememberGraphicsLayer()
+    val currentOnDragStart by rememberUpdatedState(onDragStart)
+    val currentOnDragHover by rememberUpdatedState(onDragHover)
+    val currentOnDragCommit by rememberUpdatedState(onDragCommit)
+
+    var cellCoords: LayoutCoordinates? by remember { mutableStateOf(null) }
 
     val minHeight = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
@@ -256,23 +291,56 @@ private fun WidgetCard(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = minHeight)
+            .alpha(if (isBeingDragged) 0f else 1f)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
-            .drawWithContent {
-                cardLayer.record { this@drawWithContent.drawContent() }
-                if (!isBeingDragged) drawLayer(cardLayer)
-            }
-            .dragAndDropSource(
-                drawDragDecoration = { drawLayer(cardLayer) },
-                transferData = { _ ->
-                    currentOnDragStart()
-                    DragAndDropTransferData(
-                        ClipData.newPlainText("widgetId", widgetId),
-                    )
-                },
-            ),
+            .onGloballyPositioned { coords -> cellCoords = coords }
+            .pointerInput(widgetId) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+
+                    val longPressed = withTimeoutOrNull(LONG_PRESS_TIMEOUT_MS) {
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val change = ev.changes.firstOrNull { it.id == down.id }
+                            if (change != null && !change.pressed) return@withTimeoutOrNull false
+                        }
+                        @Suppress("UNREACHABLE_CODE") true
+                    } ?: true
+
+                    if (longPressed != true) return@awaitEachGesture
+
+                    pressOffsetWithinCell.value = down.position
+                    val cellOrigin = cellCoords?.boundsInWindow()?.topLeft ?: Offset.Zero
+                    fingerInWindow.value = cellOrigin + down.position
+                    draggingWidget.value = widget
+                    currentOnDragStart(widgetId)
+
+                    try {
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val change = ev.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                currentOnDragCommit()
+                                break
+                            }
+                            val origin = cellCoords?.boundsInWindow()?.topLeft ?: cellOrigin
+                            val finger = origin + change.position
+                            fingerInWindow.value = finger
+                            hitTest(finger, dragBounds, draggedKey = widgetId)?.let { key ->
+                                currentOnDragHover(key)
+                            }
+                            edgeAutoScroll.update(finger.y)
+                        }
+                    } finally {
+                        fingerInWindow.value = null
+                        draggingWidget.value = null
+                        edgeAutoScroll.stop()
+                    }
+                }
+            },
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(
@@ -295,6 +363,46 @@ private fun WidgetCard(
                         "Move to Your widgets",
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun FloatingWidgetCard(widget: GenericWidget) {
+    var lifted by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { lifted = true }
+    val elevation by animateDpAsState(if (lifted) 4.dp else 0.dp, label = "float-elevation")
+    val scale by animateFloatAsState(if (lifted) 1.05f else 1f, label = "float-scale")
+
+    val minHeight = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
+
+    Card(
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation),
+        modifier = Modifier
+            .fillMaxWidth(if (widget.size == WidgetSize.FULL) 1f else 0.5f)
+            .heightIn(min = minHeight)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = debugLabel(widget),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = if (widget.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
