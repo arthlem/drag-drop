@@ -2,14 +2,10 @@
 
 package com.arthlem.dragdrop
 
-import android.content.ClipData
-import android.content.ClipDescription
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
-import androidx.compose.foundation.draganddrop.dragAndDropSource
-import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
@@ -64,17 +60,10 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropEvent
-import androidx.compose.ui.draganddrop.DragAndDropTarget
-import androidx.compose.ui.draganddrop.DragAndDropTransferData
-import androidx.compose.ui.draganddrop.mimeTypes
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -91,30 +80,6 @@ import kotlinx.coroutines.launch
 
 private const val LONG_PRESS_TIMEOUT_MS = 200L
 
-private fun acceptPlainText(event: DragAndDropEvent): Boolean =
-    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN)
-
-@Composable
-private fun rememberDropTarget(
-    onHover: () -> Unit,
-    onDrop: () -> Unit,
-    onEnded: () -> Unit,
-): DragAndDropTarget {
-    val currentOnHover by rememberUpdatedState(onHover)
-    val currentOnDrop by rememberUpdatedState(onDrop)
-    val currentOnEnded by rememberUpdatedState(onEnded)
-    return remember {
-        object : DragAndDropTarget {
-            override fun onEntered(event: DragAndDropEvent) { currentOnHover() }
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                currentOnDrop()
-                return true
-            }
-            override fun onEnded(event: DragAndDropEvent) { currentOnEnded() }
-        }
-    }
-}
-
 @Composable
 fun WidgetsScreen(viewModel: WidgetsViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -128,9 +93,6 @@ fun WidgetsScreen(viewModel: WidgetsViewModel) {
 private fun WidgetsContent(viewModel: WidgetsViewModel) {
     val entries: List<GridEntry> = viewModel.entries
     val dragState = viewModel.dragState
-    val commitIfDragging: () -> Unit = remember(viewModel) {
-        { if (viewModel.dragState != null) viewModel.onDragCommit() }
-    }
 
     val dragBounds: SnapshotStateMap<String, Rect> = remember { mutableStateMapOf() }
     val pressOffsetWithinCell: MutableState<Offset> = remember { mutableStateOf(Offset.Zero) }
@@ -178,23 +140,17 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
         ) { entry ->
             when (entry) {
                 is GridEntry.Header -> HeaderCell(
-	                title = entry.title,
-	                onHover = { viewModel.onDragHover(entry.key) },
-	                onDrop = { viewModel.onDragCommit() },
-	                onEnded = commitIfDragging,
-	                modifier = Modifier
-	                    .animateItem()
-	                    .bindBounds(entry.key, dragBounds),
+                    title = entry.title,
+                    modifier = Modifier
+                        .animateItem()
+                        .bindBounds(entry.key, dragBounds),
                 )
                 is GridEntry.Empty -> EmptyDropZone(
-	                message = entry.message,
-	                isDragActive = dragState != null,
-	                onHover = { viewModel.onDragHover(entry.key) },
-	                onDrop = { viewModel.onDragCommit() },
-	                onEnded = commitIfDragging,
-	                modifier = Modifier
-	                    .animateItem()
-	                    .bindBounds(entry.key, dragBounds),
+                    message = entry.message,
+                    isDragActive = dragState != null,
+                    modifier = Modifier
+                        .animateItem()
+                        .bindBounds(entry.key, dragBounds),
                 )
                 is GridEntry.Cell -> when (val s = entry.state) {
                     is WidgetState.Loaded -> WidgetCard(
@@ -244,11 +200,8 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
 
 @Composable
 private fun HeaderCell(
-	title: String,
-	onHover: () -> Unit,
-	onDrop: () -> Unit,
-	onEnded: () -> Unit,
-	modifier: Modifier = Modifier,
+    title: String,
+    modifier: Modifier = Modifier,
 ) {
     Text(
         text = title,
@@ -456,12 +409,9 @@ private fun FailureCell(
 
 @Composable
 private fun EmptyDropZone(
-	message: String,
-	isDragActive: Boolean,
-	onHover: () -> Unit,
-	onDrop: () -> Unit,
-	onEnded: () -> Unit,
-	modifier: Modifier = Modifier,
+    message: String,
+    isDragActive: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     Card(
         modifier = modifier
