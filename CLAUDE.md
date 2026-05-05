@@ -19,9 +19,10 @@ Use `Modifier.dragAndDropSource` / `Modifier.dragAndDropTarget` (`androidx.compo
 
 - **MVVM with strict separation.** `WidgetsViewModel` owns all mutation logic. `WidgetsScreen.kt` composables are pure renderers — they observe state and forward user input via callbacks.
 - **`WidgetsUseCase` is constructor-injected** into the ViewModel via Compose's `viewModelFactory` in `MainActivity`. The interface returns `Either<Throwable, Flow<List<WidgetState>>>` — `Left` is a terminal eligibility-failure state (no flow exists to subscribe to); `Right` is the live widget stream. `FakeWidgetsUseCase` flips a `FAIL_ELIGIBILITY` constant to test the error path.
-- **Sealed `WidgetState` hierarchy.** Three top-level variants: `Skeleton(key, size)`, `Failure(key, size)`, and `Loaded` (a sealed sub-interface with `InvestmentEntryPoint`, `Pfm`, and `Tile.{Monizze, Cashback, Pluxee}`). `Loaded` carries `id` / `size` / `isInYourWidgets` and a polymorphic `toggleIsInYourWidgets(b)` that returns the same concrete subtype — reorder/transfer logic preserves widget type without `when`-branching.
+- **Sealed `GenericWidget` hierarchy carries the typed widget data.** Concrete data classes (`InvestmentEntryPoint`, `Pfm`, `Tile.{Monizze, Cashback, Pluxee}`) each carry `id` / `size` / `isInYourWidgets` and a polymorphic `toggleIsInYourWidgets(b)` that returns the same concrete subtype — reorder/transfer logic preserves widget type without `when`-branching. Per-type data fields (presentation payloads, balances, etc.) live on each impl.
+- **`WidgetState` is the cell's lifecycle state.** Three variants: `Skeleton(key, size)` and `Failure(key, size)` (placeholders with no widget data), and `Loaded(widget: GenericWidget)` — a thin wrapper marking "this slot has finished loading". The `widget` field is the only payload `Loaded` carries.
 - **`SnapshotStateList<GridEntry>` as source of truth.** Backed by a private `_entries`; the public view is `List<GridEntry>` (read-only). Compose still observes mutations because the underlying list is `SnapshotStateList`.
-- **Sealed `GridEntry` interface.** Three variants: `Header(key, title)`, `Cell(state: WidgetState)`, `Empty(key, message)`. `GridEntry.Cell.key` resolves to `state.id` for `Loaded` and to `state.key` for `Skeleton`/`Failure`.
+- **Sealed `GridEntry` interface.** Three variants: `Header(key, title)`, `Cell(state: WidgetState)`, `Empty(key, message)`. `GridEntry.Cell.key` resolves to `state.widget.id` for `Loaded` and to `state.key` for `Skeleton`/`Failure`.
 - **Three-state UI.** `UiState.Loading` (6 skeletons in `_entries`, no headers, no drag), `UiState.Error(cause)` (empty `_entries`, `ErrorScreen` rendered instead of the grid), `UiState.Loaded` (full grid with headers, section partition, drag/drop). `UiState.Loading` and `UiState.Loaded` both render through the same `WidgetsContent` — only the `_entries` contents change.
 - **Single source of truth for `isInYourWidgets`.** Derived from list position relative to the Available header — never stored independently after initial load. `reconcileIsYoursForDraggedWidget` runs after each drag move and uses `current.toggleIsInYourWidgets(...)` to preserve the subtype.
 - **Deferred emissions during drag.** A `pendingEntries: List<WidgetState>?` field stores any flow emission that arrives mid-drag; `onDragCommit` / `onDragCancel` replay it via `flushPendingEntriesIfAny()` so a remote update cannot stomp on an active drag.
@@ -62,7 +63,7 @@ The `+`/`−` button (`onTransfer`) is the only way to programmatically send a w
 
 | Composable | Drop key | Resolution |
 |---|---|---|
-| `WidgetCard` | `state.id` | Direction-aware insert at target's `entries` index |
+| `WidgetCard` | `state.widget.id` | Direction-aware insert at target's `entries` index |
 | `HeaderCell` (Yours) | `YOURS_HEADER_KEY` | Insert just after the Yours header (start of Yours) |
 | `HeaderCell` (Other) | `AVAILABLE_HEADER_KEY` | Insert at the available header's own index — direction-aware then takes over (drag-down lands end-of-Yours, drag-up lands start-of-Other) |
 | `EmptyDropZone` | `YOURS_EMPTY_KEY` / `AVAILABLE_EMPTY_KEY` | Insert at the placeholder's own index (the placeholder is then stripped by reconcile) |
@@ -117,8 +118,9 @@ Encapsulation rules to keep the public surface clean:
 ### Helpers (private)
 
 - `indexOfKey(key: String): Int` — replaces six former `entries.indexOfFirst { it is GridEntry.Header && it.key == X }` sites. The `is GridEntry.Header` guard was redundant since keys are globally unique across the list.
-- `indexOfLoaded(widgetId: String): Int` — type-narrowed lookup for `Cell` entries holding a `WidgetState.Loaded`.
-- `loadedAt(index: Int): WidgetState.Loaded?` — safe accessor that folds `getOrNull` + `as? GridEntry.Cell` + `state as? WidgetState.Loaded`.
+- `indexOfLoaded(widgetId: String): Int` — type-narrowed lookup for `Cell` entries where `state.widget.id == widgetId`.
+- `loadedAt(index: Int): GenericWidget?` — safe accessor that folds `getOrNull` + `as? GridEntry.Cell` + `(state as? WidgetState.Loaded)?.widget`.
+- `cellOf(widget: GenericWidget): GridEntry.Cell` — wraps a `GenericWidget` in `WidgetState.Loaded(widget)` then in `GridEntry.Cell`. Used at the five mutation sites that re-insert into `_entries` (`onDragHover`, `onDragCommit` Yours→Other branch, `onDragCancel`, `onTransfer`, `reconcileIsYoursForDraggedWidget`) — eliminates the repeated triple-wrapping pattern.
 
 ### Mutation atomicity
 
@@ -141,7 +143,8 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 ## Files
 
 - `app/src/main/java/com/arthlem/dragdrop/MainActivity.kt` — entry point; constructs `WidgetsViewModel` via `viewModelFactory` with `FakeWidgetsUseCase`, hosts `WidgetsScreen` under `MaterialTheme`.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` hierarchy (`Skeleton`/`Failure`/`Loaded` with `InvestmentEntryPoint`/`Pfm`/`Tile.{Monizze,Cashback,Pluxee}`).
+- `app/src/main/java/com/arthlem/dragdrop/GenericWidget.kt` — sealed `GenericWidget` data hierarchy with `InvestmentEntryPoint`/`Pfm`/`Tile.{Monizze,Cashback,Pluxee}` impls, each with polymorphic `toggleIsInYourWidgets`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` (`Skeleton`/`Failure`/`Loaded(widget: GenericWidget)`).
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsUseCase.kt` — `WidgetsUseCase` interface + `FakeWidgetsUseCase` returning `Either<Throwable, Flow<List<WidgetState>>>`.
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers, deferred-emission logic, skeleton seed.
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `rememberDropTarget` / `acceptPlainText` / `cellSize` / `debugLabel` / `detectShortLongPress`.
