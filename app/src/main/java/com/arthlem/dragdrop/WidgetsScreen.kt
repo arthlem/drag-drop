@@ -41,6 +41,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -171,7 +172,9 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
 	                onHover = { viewModel.onDragHover(entry.key) },
 	                onDrop = { viewModel.onDragCommit() },
 	                onEnded = commitIfDragging,
-	                modifier = Modifier.animateItem(),
+	                modifier = Modifier
+	                    .animateItem()
+	                    .bindBounds(entry.key, dragBounds),
                 )
                 is GridEntry.Empty -> EmptyDropZone(
 	                message = entry.message,
@@ -179,7 +182,9 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
 	                onHover = { viewModel.onDragHover(entry.key) },
 	                onDrop = { viewModel.onDragCommit() },
 	                onEnded = commitIfDragging,
-	                modifier = Modifier.animateItem(),
+	                modifier = Modifier
+	                    .animateItem()
+	                    .bindBounds(entry.key, dragBounds),
                 )
                 is GridEntry.Cell -> when (val s = entry.state) {
                     is WidgetState.Loaded -> WidgetCard(
@@ -190,7 +195,9 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
 	                    onDrop = { viewModel.onDragCommit() },
 	                    onEnded = commitIfDragging,
 	                    onTransfer = { viewModel.onTransfer(s.widget.id) },
-	                    modifier = Modifier.animateItem(),
+	                    modifier = Modifier
+	                        .animateItem()
+	                        .bindBounds(s.widget.id, dragBounds),
                     )
                     is WidgetState.Skeleton -> SkeletonCell(
 	                    size = s.size,
@@ -215,18 +222,13 @@ private fun HeaderCell(
 	onEnded: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
-    val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
     Text(
         text = title,
         style = MaterialTheme.typography.titleLarge,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 16.dp, bottom = 4.dp)
-            .dragAndDropTarget(
-                shouldStartDragAndDrop = ::acceptPlainText,
-                target = dropTarget,
-            ),
+            .padding(top = 16.dp, bottom = 4.dp),
     )
 }
 
@@ -244,7 +246,6 @@ private fun WidgetCard(
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val widgetId = widget.id
     val cardLayer = rememberGraphicsLayer()
-    val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
 
     val minHeight = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
@@ -263,10 +264,6 @@ private fun WidgetCard(
                 cardLayer.record { this@drawWithContent.drawContent() }
                 if (!isBeingDragged) drawLayer(cardLayer)
             }
-            .dragAndDropTarget(
-                shouldStartDragAndDrop = ::acceptPlainText,
-                target = dropTarget,
-            )
             .dragAndDropSource(
                 drawDragDecoration = { drawLayer(cardLayer) },
                 transferData = { _ ->
@@ -358,7 +355,6 @@ private fun EmptyDropZone(
 	onEnded: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
-    val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -370,10 +366,6 @@ private fun EmptyDropZone(
                 else
                     MaterialTheme.colorScheme.outlineVariant,
                 shape = RoundedCornerShape(12.dp),
-            )
-            .dragAndDropTarget(
-                shouldStartDragAndDrop = ::acceptPlainText,
-                target = dropTarget,
             ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
@@ -417,6 +409,19 @@ private fun ErrorScreen(cause: Throwable) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+@Composable
+private fun Modifier.bindBounds(
+    key: String,
+    bounds: SnapshotStateMap<String, Rect>,
+): Modifier {
+    DisposableEffect(key) {
+        onDispose { bounds.remove(key) }
+    }
+    return this.onGloballyPositioned { coords ->
+        bounds[key] = coords.boundsInWindow()
     }
 }
 
