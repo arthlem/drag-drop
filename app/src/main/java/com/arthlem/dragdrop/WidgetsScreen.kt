@@ -150,13 +150,13 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                 )
                 is GridEntry.Cell -> when (val s = entry.state) {
                     is WidgetState.Loaded -> WidgetCard(
-	                    state = s,
-	                    isBeingDragged = dragState?.draggedWidget?.id == s.id,
-	                    onDragStart = { viewModel.onDragStart(s.id) },
+	                    widget = s.widget,
+	                    isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
+	                    onDragStart = { viewModel.onDragStart(s.widget.id) },
 	                    onHover = { viewModel.onDragHover(entry.key) },
 	                    onDrop = { viewModel.onDragCommit() },
 	                    onEnded = commitIfDragging,
-	                    onTransfer = { viewModel.onTransfer(s.id) },
+	                    onTransfer = { viewModel.onTransfer(s.widget.id) },
 	                    modifier = Modifier.animateItem(),
                     )
                     is WidgetState.Skeleton -> SkeletonCell(
@@ -198,7 +198,7 @@ private fun HeaderCell(
 
 @Composable
 private fun WidgetCard(
-	state: WidgetState.Loaded,
+	widget: GenericWidget,
 	isBeingDragged: Boolean,
 	onDragStart: () -> Unit,
 	onHover: () -> Unit,
@@ -208,11 +208,11 @@ private fun WidgetCard(
 	modifier: Modifier = Modifier,
 ) {
     val currentOnDragStart by rememberUpdatedState(onDragStart)
-    val widgetId = state.id
+    val widgetId = widget.id
     val cardLayer = rememberGraphicsLayer()
     val dropTarget = rememberDropTarget(onHover, onDrop, onEnded)
 
-    val minHeight = if (state.size == WidgetSize.FULL) 120.dp else 96.dp
+    val minHeight = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
     val scale by animateFloatAsState(if (isBeingDragged) 1.05f else 1f, label = "drag-scale")
 
@@ -255,14 +255,14 @@ private fun WidgetCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = debugLabel(state),
+                text = debugLabel(widget),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = onTransfer) {
                 Icon(
-                    imageVector = if (state.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add,
-                    contentDescription = if (state.isInYourWidgets)
+                    imageVector = if (widget.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add,
+                    contentDescription = if (widget.isInYourWidgets)
                         "Move to Other widgets"
                     else
                         "Move to Your widgets",
@@ -391,17 +391,17 @@ private fun ErrorScreen(cause: Throwable) {
 }
 
 private fun cellSize(state: WidgetState): WidgetSize = when (state) {
-    is WidgetState.Loaded -> state.size
+    is WidgetState.Loaded -> state.widget.size
     is WidgetState.Skeleton -> state.size
     is WidgetState.Failure -> state.size
 }
 
-private fun debugLabel(state: WidgetState.Loaded): String = when (state) {
-    is WidgetState.Loaded.InvestmentEntryPoint -> "Investment · ${state.id}"
-    is WidgetState.Loaded.Pfm -> "PFM · ${state.id}"
-    is WidgetState.Loaded.Tile.Monizze -> "Monizze · ${state.id}"
-    is WidgetState.Loaded.Tile.Cashback -> "Cashback · ${state.id}"
-    is WidgetState.Loaded.Tile.Pluxee -> "Pluxee · ${state.id}"
+private fun debugLabel(widget: GenericWidget): String = when (widget) {
+    is GenericWidget.InvestmentEntryPoint -> "Investment · ${widget.id}"
+    is GenericWidget.Pfm -> "PFM · ${widget.id}"
+    is GenericWidget.Tile.Monizze -> "Monizze · ${widget.id}"
+    is GenericWidget.Tile.Cashback -> "Cashback · ${widget.id}"
+    is GenericWidget.Tile.Pluxee -> "Pluxee · ${widget.id}"
 }
 
 private suspend fun AwaitPointerEventScope.detectShortLongPress(

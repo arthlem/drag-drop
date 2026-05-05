@@ -19,12 +19,12 @@ class FakeWidgetsUseCase : WidgetsUseCase {
         private const val ELIGIBILITY_DELAY_MS = 500L
 
         private val INITIAL_WIDGETS: List<WidgetState> = listOf(
-            WidgetState.Loaded.Tile.Monizze(id = "m1", size = WidgetSize.SMALL, isInYourWidgets = true),
-            WidgetState.Loaded.Tile.Cashback(id = "c1", size = WidgetSize.SMALL, isInYourWidgets = true),
-            WidgetState.Loaded.InvestmentEntryPoint(id = "iep1", size = WidgetSize.FULL, isInYourWidgets = true),
-            WidgetState.Loaded.Pfm(id = "pfm1", size = WidgetSize.FULL, isInYourWidgets = false),
-            WidgetState.Loaded.Tile.Pluxee(id = "p1", size = WidgetSize.SMALL, isInYourWidgets = false),
-            WidgetState.Loaded.Tile.Monizze(id = "m2", size = WidgetSize.SMALL, isInYourWidgets = false),
+            WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m1", size = WidgetSize.SMALL, isInYourWidgets = true)),
+            WidgetState.Loaded(GenericWidget.Tile.Cashback(id = "c1", size = WidgetSize.SMALL, isInYourWidgets = true)),
+            WidgetState.Loaded(GenericWidget.InvestmentEntryPoint(id = "iep1", size = WidgetSize.FULL, isInYourWidgets = true)),
+            WidgetState.Loaded(GenericWidget.Pfm(id = "pfm1", size = WidgetSize.FULL, isInYourWidgets = false)),
+            WidgetState.Loaded(GenericWidget.Tile.Pluxee(id = "p1", size = WidgetSize.SMALL, isInYourWidgets = false)),
+            WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m2", size = WidgetSize.SMALL, isInYourWidgets = false)),
         )
     }
 

@@ -17,7 +17,7 @@ sealed interface GridEntry {
     data class Header(override val key: String, val title: String) : GridEntry
     data class Cell(val state: WidgetState) : GridEntry {
         override val key: String get() = when (state) {
-            is WidgetState.Loaded -> state.id
+            is WidgetState.Loaded -> state.widget.id
             is WidgetState.Skeleton -> state.key
             is WidgetState.Failure -> state.key
         }
@@ -26,7 +26,7 @@ sealed interface GridEntry {
 }
 
 data class DragState(
-    val draggedWidget: WidgetState.Loaded,
+    val draggedWidget: GenericWidget,
     val originalIndex: Int,
     val originalIsInYourWidgets: Boolean,
 )
@@ -111,7 +111,7 @@ class WidgetsViewModel(
         // path ships — otherwise non-Loaded items would land between the section headers.
         val (yours, other) = widgets
             .filterIsInstance<WidgetState.Loaded>()
-            .partition { it.isInYourWidgets }
+            .partition { it.widget.isInYourWidgets }
         Snapshot.withMutableSnapshot {
             _entries.clear()
             _entries.add(GridEntry.Header(YOURS_HEADER_KEY, YOURS_HEADER_TITLE))
@@ -152,7 +152,7 @@ class WidgetsViewModel(
             val current = loadedAt(currentIndex) ?: return@withMutableSnapshot
             _entries.removeAt(currentIndex)
             val safeIndex = targetIndex.coerceIn(0, _entries.size)
-            _entries.add(safeIndex, GridEntry.Cell(current))
+            _entries.add(safeIndex, GridEntry.Cell(WidgetState.Loaded(current)))
             reconcileIsYoursForDraggedWidget(widgetId)
             reconcileEmptyPlaceholders()
         }
@@ -179,7 +179,7 @@ class WidgetsViewModel(
                     val target = (if (anchorIndex < 0) _entries.size else anchorIndex + 1)
                         .coerceIn(0, _entries.size)
                     val moved = state.draggedWidget.toggleIsInYourWidgets(false)
-                    _entries.add(target, GridEntry.Cell(moved))
+                    _entries.add(target, GridEntry.Cell(WidgetState.Loaded(moved)))
                     _dragState.value = null
                     reconcileEmptyPlaceholders()
                 }
@@ -201,7 +201,7 @@ class WidgetsViewModel(
             if (currentIndex >= 0) _entries.removeAt(currentIndex)
             val restored = state.draggedWidget.toggleIsInYourWidgets(state.originalIsInYourWidgets)
             val safeOriginal = state.originalIndex.coerceIn(0, _entries.size)
-            _entries.add(safeOriginal, GridEntry.Cell(restored))
+            _entries.add(safeOriginal, GridEntry.Cell(WidgetState.Loaded(restored)))
             _dragState.value = null
             reconcileEmptyPlaceholders()
         }
@@ -218,7 +218,7 @@ class WidgetsViewModel(
             val anchor = indexOfKey(anchorKey)
             val target = (if (anchor < 0) _entries.size else anchor + 1)
                 .coerceIn(0, _entries.size)
-            _entries.add(target, GridEntry.Cell(moved))
+            _entries.add(target, GridEntry.Cell(WidgetState.Loaded(moved)))
             reconcileEmptyPlaceholders()
         }
     }
@@ -233,11 +233,11 @@ class WidgetsViewModel(
 
     private fun indexOfLoaded(widgetId: String): Int =
         _entries.indexOfFirst {
-            it is GridEntry.Cell && it.state is WidgetState.Loaded && it.state.id == widgetId
+            it is GridEntry.Cell && it.state is WidgetState.Loaded && it.state.widget.id == widgetId
         }
 
-    private fun loadedAt(index: Int): WidgetState.Loaded? =
-        ((_entries.getOrNull(index) as? GridEntry.Cell)?.state as? WidgetState.Loaded)
+    private fun loadedAt(index: Int): GenericWidget? =
+        ((_entries.getOrNull(index) as? GridEntry.Cell)?.state as? WidgetState.Loaded)?.widget
 
     private fun reconcileIsYoursForDraggedWidget(widgetId: String) {
         val index = indexOfLoaded(widgetId)
@@ -245,7 +245,7 @@ class WidgetsViewModel(
         val availableHeaderIndex = indexOfKey(AVAILABLE_HEADER_KEY)
         val shouldBeInYourWidgets = availableHeaderIndex < 0 || index < availableHeaderIndex
         if (current.isInYourWidgets != shouldBeInYourWidgets) {
-            _entries[index] = GridEntry.Cell(current.toggleIsInYourWidgets(shouldBeInYourWidgets))
+            _entries[index] = GridEntry.Cell(WidgetState.Loaded(current.toggleIsInYourWidgets(shouldBeInYourWidgets)))
         }
     }
 
