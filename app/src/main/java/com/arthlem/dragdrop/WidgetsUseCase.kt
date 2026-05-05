@@ -16,7 +16,7 @@ class FakeWidgetsUseCase : WidgetsUseCase {
     companion object {
         /** Flip to `true` to verify the error screen on next install. */
         const val FAIL_ELIGIBILITY = false
-        private const val ELIGIBILITY_DELAY_MS = 500L
+        private const val ELIGIBILITY_DELAY_MS = 2000L
 
         private val INITIAL_WIDGETS: List<WidgetState> = listOf(
             WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m1", size = WidgetSize.SMALL, isInYourWidgets = true)),
