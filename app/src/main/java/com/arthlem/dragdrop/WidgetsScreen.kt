@@ -60,6 +60,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -332,8 +333,9 @@ private fun FloatingWidgetCard(widget: GenericWidget) {
     Card(
         elevation = CardDefaults.cardElevation(defaultElevation = elevation),
         modifier = Modifier
+	        .shadow(elevation, RoundedCornerShape(12.dp))
             .fillMaxWidth(if (widget.size == WidgetSize.FULL) 1f else 0.5f)
-            .heightIn(min = minHeight)
+            .height(minHeight)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
