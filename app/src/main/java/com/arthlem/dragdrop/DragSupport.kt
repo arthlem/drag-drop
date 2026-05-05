@@ -35,9 +35,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
-private const val LONG_PRESS_TIMEOUT_MS = 200L
+private const val LONG_PRESS_TIMEOUT_MS = 400L
 
 /**
  * Shared drag state holders — created once per `WidgetsContent` via [rememberDragController]
@@ -131,9 +130,13 @@ fun Modifier.dragSource(
                         val ev = awaitPointerEvent()
                         val change = ev.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
+                            change.consume()
                             currentOnDragCommit()
                             break
                         }
+                        // Claim the gesture so LazyVerticalGrid's built-in scroll detector doesn't
+                        // also process these drag motions and scroll the grid under our finger.
+                        change.consume()
                         val origin = cellCoords?.boundsInWindow()?.topLeft ?: cellOrigin
                         val finger = origin + change.position
                         controller.fingerInWindow.value = finger
@@ -176,8 +179,10 @@ fun rememberEdgeAutoScroll(
 }
 
 /**
- * Drives [LazyGridState.scrollBy] while a finger sits within [bandPx] of the grid's vertical edges.
- * Velocity ramps linearly from 0 at the band's outer edge to ~12 px/frame at the screen edge.
+ * Drives [LazyGridState.scrollBy] while a finger is past the grid's vertical edges.
+ * Velocity ramps linearly from 0 at the edge itself to ~MAX_PX_PER_FRAME once the finger
+ * is [bandPx] beyond the edge. Triggering only past the edge means accidental scroll
+ * during mid-screen drags is impossible — the user has to deliberately pull off the grid.
  */
 class EdgeAutoScroll(
     private val state: LazyGridState,
@@ -197,10 +202,10 @@ class EdgeAutoScroll(
 
     fun update(fingerY: Float) {
         val velocity = when {
-            fingerY < gridTopInWindow + bandPx ->
-                -lerp(MAX_PX_PER_FRAME, 0f, ((fingerY - gridTopInWindow) / bandPx).coerceIn(0f, 1f))
-            fingerY > gridBottomInWindow - bandPx ->
-                lerp(0f, MAX_PX_PER_FRAME, ((fingerY - (gridBottomInWindow - bandPx)) / bandPx).coerceIn(0f, 1f))
+            fingerY < gridTopInWindow ->
+                -lerp(0f, MAX_PX_PER_FRAME, ((gridTopInWindow - fingerY) / bandPx).coerceIn(0f, 1f))
+            fingerY > gridBottomInWindow ->
+                lerp(0f, MAX_PX_PER_FRAME, ((fingerY - gridBottomInWindow) / bandPx).coerceIn(0f, 1f))
             else -> 0f
         }
         if (velocity == 0f) {
