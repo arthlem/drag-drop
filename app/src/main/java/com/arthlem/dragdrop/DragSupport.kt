@@ -200,10 +200,11 @@ fun rememberEdgeAutoScroll(
 }
 
 /**
- * Drives [LazyGridState.scrollBy] while a finger is past the grid's vertical edges.
- * Velocity ramps linearly from 0 at the edge itself to ~MAX_PX_PER_FRAME once the finger
- * is [bandPx] beyond the edge. Triggering only past the edge means accidental scroll
- * during mid-screen drags is impossible — the user has to deliberately pull off the grid.
+ * Drives [LazyGridState.scrollBy] while a finger sits within [bandPx] of the grid's vertical
+ * edges (inside the grid). Velocity ramps linearly from MAX_PX_PER_FRAME at the edge itself to
+ * 0 at [bandPx] inside the grid. Mid-screen drags don't trigger scroll because the drag loop
+ * `change.consume()`s pointer events — `LazyVerticalGrid`'s built-in scroll detector never sees
+ * them. This is the only path that can scroll the grid during drag.
  */
 class EdgeAutoScroll(
     private val state: LazyGridState,
@@ -223,10 +224,10 @@ class EdgeAutoScroll(
 
     fun update(fingerY: Float) {
         val velocity = when {
-            fingerY < gridTopInWindow ->
-                -lerp(0f, MAX_PX_PER_FRAME, ((gridTopInWindow - fingerY) / bandPx).coerceIn(0f, 1f))
-            fingerY > gridBottomInWindow ->
-                lerp(0f, MAX_PX_PER_FRAME, ((fingerY - gridBottomInWindow) / bandPx).coerceIn(0f, 1f))
+            fingerY < gridTopInWindow + bandPx ->
+                -lerp(MAX_PX_PER_FRAME, 0f, ((fingerY - gridTopInWindow) / bandPx).coerceIn(0f, 1f))
+            fingerY > gridBottomInWindow - bandPx ->
+                lerp(0f, MAX_PX_PER_FRAME, ((fingerY - (gridBottomInWindow - bandPx)) / bandPx).coerceIn(0f, 1f))
             else -> 0f
         }
         if (velocity == 0f) {
