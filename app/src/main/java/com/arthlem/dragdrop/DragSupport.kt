@@ -125,6 +125,12 @@ fun Modifier.dragSource(
                 controller.draggingWidget.value = widget
                 currentOnDragStart(widgetId)
 
+                // Track the last reported hover target so we don't spam onDragHover for the same
+                // cell on every pointer event. Combined with floating-center hit-testing below,
+                // this gives the natural hysteresis you'd expect from a reorder list: one swap per
+                // boundary crossing, not one swap per pointer event while the finger sits on a tile.
+                var lastHoverKey: String? = null
+
                 try {
                     while (true) {
                         val ev = awaitPointerEvent()
@@ -137,12 +143,27 @@ fun Modifier.dragSource(
                         // Claim the gesture so LazyVerticalGrid's built-in scroll detector doesn't
                         // also process these drag motions and scroll the grid under our finger.
                         change.consume()
-                        val origin = cellCoords?.boundsInWindow()?.topLeft ?: cellOrigin
+                        val cellRect = cellCoords?.boundsInWindow()
+                        val origin = cellRect?.topLeft ?: cellOrigin
                         val finger = origin + change.position
                         controller.fingerInWindow.value = finger
-                        hitTest(finger, controller.dragBounds, draggedKey = widgetId)?.let { key ->
-                            currentOnDragHover(key)
+
+                        // Hit-test against the floating widget's center, not the raw finger.
+                        // The floating widget is offset from the finger by pressOffsetWithinCell,
+                        // so its visual center is `finger - pressOffset + cellSize/2`. Using this
+                        // means a swap only fires when the *visible* dragged tile crosses into a
+                        // new slot. After the swap, the floating widget is over the new slot, so
+                        // it takes another deliberate move to trigger another swap — no flip-flop.
+                        val cellWidth = cellRect?.width ?: 0f
+                        val cellHeight = cellRect?.height ?: 0f
+                        val floatingCenter = finger - controller.pressOffsetWithinCell.value +
+                            Offset(cellWidth / 2f, cellHeight / 2f)
+                        val hoverKey = hitTest(floatingCenter, controller.dragBounds, draggedKey = widgetId)
+                        if (hoverKey != null && hoverKey != lastHoverKey) {
+                            currentOnDragHover(hoverKey)
                         }
+                        lastHoverKey = hoverKey
+
                         controller.edgeAutoScroll.update(finger.y)
                     }
                 } finally {

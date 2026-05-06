@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material.icons.Icons
@@ -32,8 +34,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -51,12 +53,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
+
+private val OVERHANG_DP = 12.dp
+private val BADGE_SIZE_DP = 28.dp
 
 @Composable
 fun WidgetsScreen(viewModel: WidgetsViewModel) {
@@ -135,9 +141,7 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                             onDragHover = { viewModel.onDragHover(it) },
                             onDragCommit = { viewModel.onDragCommit() },
                             onTransfer = { viewModel.onTransfer(s.widget.id) },
-                            modifier = Modifier
-                                .animateItem()
-                                .bindBounds(s.widget.id, controller.dragBounds),
+                            modifier = Modifier.animateItem(),
                         )
                         is WidgetState.Skeleton -> SkeletonCell(
                             size = s.size,
@@ -156,7 +160,14 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
         val widget = controller.draggingWidget.value
         if (finger != null && widget != null) {
             val boxOriginInWindow = boxCoords?.positionInWindow() ?: Offset.Zero
-            val floatingTopLeft = finger - controller.pressOffsetWithinCell.value - boxOriginInWindow
+            val overhangPx = with(LocalDensity.current) { OVERHANG_DP.toPx() }
+            // Subtract OVERHANG_DP so the floating widget's *inner* Box (the visible card) lands
+            // where the source's inner Box was at long-press. Without this offset, the floating
+            // widget's outer Box top-left aligns with the source's inner Box top-left, and the
+            // floating outer's own 12dp top+start padding then pushes the visible card 12dp
+            // down-right — a small but noticeable jump at the moment drag begins.
+            val floatingTopLeft = finger - controller.pressOffsetWithinCell.value -
+                boxOriginInWindow - Offset(overhangPx, overhangPx)
             Box(
                 modifier = Modifier
                     .offset { IntOffset(floatingTopLeft.x.roundToInt(), floatingTopLeft.y.roundToInt()) }
@@ -198,26 +209,40 @@ private fun WidgetCard(
     val scale by animateFloatAsState(if (isBeingDragged) 1.05f else 1f, label = "drag-scale")
     val height = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
 
-    WidgetCardContent(
-        widget = widget,
-        onTransfer = onTransfer,
-        elevation = elevation,
-        modifier = modifier
-            .fillMaxWidth()
-            .height(height)
-            .alpha(if (isBeingDragged) 0f else 1f)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .dragSource(
-                widget = widget,
-                controller = controller,
-                onDragStart = onDragStart,
-                onDragHover = onDragHover,
-                onDragCommit = onDragCommit,
-            ),
-    )
+    // Outer Box reserves layout space for the overhanging button (top + start padding).
+    // Inner Box holds the actual widget visual and owns BOTH the drop-target rect (bindBounds)
+    // and the drag source. Aligning these on the inner Box means adjacent cells' rects don't
+    // overlap in the overhang region — eliminating the cross-cell hover flicker.
+    Box(modifier = modifier.padding(top = OVERHANG_DP, start = OVERHANG_DP)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(height)
+                .alpha(if (isBeingDragged) 0f else 1f)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .bindBounds(widget.id, controller.dragBounds)
+                .dragSource(
+                    widget = widget,
+                    controller = controller,
+                    onDragStart = onDragStart,
+                    onDragHover = onDragHover,
+                    onDragCommit = onDragCommit,
+                ),
+        ) {
+            WidgetCardContent(widget = widget, elevation = elevation)
+        }
+        TransferBadge(
+            widget = widget,
+            onClick = onTransfer,
+            isBeingDragged = isBeingDragged,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset(x = -OVERHANG_DP, y = -OVERHANG_DP),
+        )
+    }
 }
 
 @Composable
@@ -228,36 +253,50 @@ private fun FloatingWidgetCard(widget: GenericWidget) {
     val scale by animateFloatAsState(if (lifted) 1.05f else 1f, label = "float-scale")
     val height = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
 
-    WidgetCardContent(
-        widget = widget,
-        onTransfer = null,
-        elevation = elevation,
+    Box(
         modifier = Modifier
             .fillMaxWidth(if (widget.size == WidgetSize.FULL) 1f else 0.5f)
-            .height(height)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            },
-    )
+            .padding(top = OVERHANG_DP, start = OVERHANG_DP),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(height)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                },
+        ) {
+            WidgetCardContent(widget = widget, elevation = elevation)
+        }
+        TransferBadge(
+            widget = widget,
+            onClick = null,
+            isBeingDragged = false,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset(x = -OVERHANG_DP, y = -OVERHANG_DP),
+        )
+    }
 }
 
 @Composable
 private fun WidgetCardContent(
     widget: GenericWidget,
-    onTransfer: (() -> Unit)?,
     elevation: Dp,
     modifier: Modifier = Modifier,
 ) {
     Card(
         elevation = CardDefaults.cardElevation(defaultElevation = elevation),
-        modifier = modifier.shadow(elevation, RoundedCornerShape(12.dp)),
+        modifier = modifier
+            .fillMaxSize()
+            .shadow(elevation, RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(start = 16.dp, end = 8.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -265,20 +304,49 @@ private fun WidgetCardContent(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
-            if (onTransfer != null) {
-                IconButton(onClick = onTransfer) {
-                    Icon(
-                        imageVector = if (widget.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add,
-                        contentDescription = if (widget.isInYourWidgets) "Move to Other widgets" else "Move to Your widgets",
-                    )
-                }
-            } else {
-                Icon(
-                    imageVector = if (widget.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        }
+    }
+}
+
+@Composable
+private fun TransferBadge(
+    widget: GenericWidget,
+    onClick: (() -> Unit)?,
+    isBeingDragged: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val icon = if (widget.isInYourWidgets) Icons.Default.Remove else Icons.Default.Add
+    val description = if (widget.isInYourWidgets) "Move to Other widgets" else "Move to Your widgets"
+    val badgeModifier = modifier
+        .size(BADGE_SIZE_DP)
+        .alpha(if (isBeingDragged) 0f else 1f)
+
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 2.dp,
+            modifier = badgeModifier,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = description,
+                modifier = Modifier.padding(6.dp),
+            )
+        }
+    } else {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 2.dp,
+            modifier = badgeModifier,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.padding(6.dp),
+            )
         }
     }
 }
