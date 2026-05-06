@@ -23,6 +23,13 @@ sealed interface GridEntry {
         }
     }
     data class Empty(override val key: String, val message: String) : GridEntry
+    /**
+     * Invisible 1-column slot that fills out a partial row. Acts as a first-class drop target:
+     * dropping a widget onto a RowFiller swaps the widget and the filler in [_entries], so the
+     * empty slot moves to where the widget came from. Reconciliation keeps the filler count per
+     * section consistent with layout requirements but preserves user-placed positions.
+     */
+    data class RowFiller(override val key: String) : GridEntry
 }
 
 data class DragState(
@@ -51,6 +58,10 @@ class WidgetsViewModel(
         private const val AVAILABLE_HEADER_TITLE = "Other widgets"
         private const val YOURS_EMPTY_MESSAGE = "Drop a widget here"
         private const val AVAILABLE_EMPTY_MESSAGE = "Nothing available"
+
+        private const val FILLER_YOURS_KEY_PREFIX = "filler_yours_"
+        private const val FILLER_OTHER_KEY_PREFIX = "filler_other_"
+        private const val GRID_COLS = 2
 
         private val SKELETON_SEED: List<WidgetState.Skeleton> = listOf(
             WidgetState.Skeleton("skeleton_0", WidgetSize.SMALL),
@@ -118,6 +129,7 @@ class WidgetsViewModel(
             _entries.addAll(yours.map { GridEntry.Cell(it) })
             _entries.add(GridEntry.Header(AVAILABLE_HEADER_KEY, AVAILABLE_HEADER_TITLE))
             _entries.addAll(other.map { GridEntry.Cell(it) })
+            reconcileRowFillers()
             reconcileEmptyPlaceholders()
         }
     }
@@ -141,6 +153,11 @@ class WidgetsViewModel(
         val currentIndex = indexOfLoaded(widgetId)
         if (currentIndex < 0) return
 
+        // Filler targets resolve to their entries-index just like cells. The standard
+        // removeAt + add reorder lands the dragged widget at the filler's position; the
+        // following reconcile always strips and re-adds fillers at canonical positions, so
+        // the *visible* drop spot may shift as auto-pack repacks the section. The benefit:
+        // no awkward filler placements (top of section, stranded after a full-span widget).
         val targetIndex = if (targetKey == YOURS_HEADER_KEY) {
             indexOfKey(YOURS_HEADER_KEY).let { if (it < 0) -1 else it + 1 }
         } else {
@@ -154,6 +171,7 @@ class WidgetsViewModel(
             val safeIndex = targetIndex.coerceIn(0, _entries.size)
             _entries.add(safeIndex, cellOf(current))
             reconcileIsYoursForDraggedWidget(widgetId)
+            reconcileRowFillers()
             reconcileEmptyPlaceholders()
         }
     }
@@ -181,6 +199,7 @@ class WidgetsViewModel(
                     val moved = state.draggedWidget.toggleIsInYourWidgets(false)
                     _entries.add(target, cellOf(moved))
                     _dragState.value = null
+                    reconcileRowFillers()
                     reconcileEmptyPlaceholders()
                 }
             }
@@ -203,6 +222,7 @@ class WidgetsViewModel(
             val safeOriginal = state.originalIndex.coerceIn(0, _entries.size)
             _entries.add(safeOriginal, cellOf(restored))
             _dragState.value = null
+            reconcileRowFillers()
             reconcileEmptyPlaceholders()
         }
         flushPendingEntriesIfAny()
@@ -219,6 +239,7 @@ class WidgetsViewModel(
             val target = (if (anchor < 0) _entries.size else anchor + 1)
                 .coerceIn(0, _entries.size)
             _entries.add(target, cellOf(moved))
+            reconcileRowFillers()
             reconcileEmptyPlaceholders()
         }
     }
@@ -265,6 +286,60 @@ class WidgetsViewModel(
         }
         if (yoursHeaderIndex >= 0 && availableHeaderIndex == yoursHeaderIndex + 1) {
             _entries.add(yoursHeaderIndex + 1, GridEntry.Empty(YOURS_EMPTY_KEY, YOURS_EMPTY_MESSAGE))
+        }
+    }
+
+    /**
+     * Strip every [GridEntry.RowFiller] in each section and re-add at canonical positions:
+     * just before any full-span widget that follows a partial row, plus end-of-section if the
+     * last row is incomplete. Always re-canonicalizes — no skip-on-match — so fillers can never
+     * end up in awkward positions like immediately after a section header or stranded between
+     * a full-span widget and a single trailing small widget.
+     */
+    private fun reconcileRowFillers() {
+        // Other section first so the Yours pass works against stable indices.
+        reconcileSectionFillers(AVAILABLE_HEADER_KEY, null, FILLER_OTHER_KEY_PREFIX)
+        reconcileSectionFillers(YOURS_HEADER_KEY, AVAILABLE_HEADER_KEY, FILLER_YOURS_KEY_PREFIX)
+    }
+
+    private fun reconcileSectionFillers(headerKey: String, nextHeaderKey: String?, fillerPrefix: String) {
+        val headerIndex = indexOfKey(headerKey)
+        if (headerIndex < 0) return
+        val sectionEnd = nextHeaderKey?.let { indexOfKey(it) }?.takeIf { it >= 0 } ?: _entries.size
+
+        // Strip existing fillers in the section.
+        for (i in (sectionEnd - 1) downTo (headerIndex + 1)) {
+            if (_entries[i] is GridEntry.RowFiller) _entries.removeAt(i)
+        }
+
+        // Re-find section start (may have shifted) and walk cells, inserting fillers at canonical positions.
+        val rebuiltStart = indexOfKey(headerKey).takeIf { it >= 0 }?.let { it + 1 } ?: return
+        var col = 0
+        var fillerCounter = 0
+        var idx = rebuiltStart
+        while (idx < _entries.size) {
+            val entry = _entries[idx]
+            if (nextHeaderKey != null && entry.key == nextHeaderKey) break
+            val widget = ((entry as? GridEntry.Cell)?.state as? WidgetState.Loaded)?.widget
+            if (widget != null) {
+                if (widget.size == WidgetSize.FULL) {
+                    if (col != 0) {
+                        repeat(GRID_COLS - col) {
+                            _entries.add(idx, GridEntry.RowFiller("$fillerPrefix${fillerCounter++}"))
+                            idx++
+                        }
+                        col = 0
+                    }
+                } else {
+                    col = (col + 1) % GRID_COLS
+                }
+            }
+            idx++
+        }
+        if (col != 0) {
+            repeat(GRID_COLS - col) {
+                _entries.add(idx, GridEntry.RowFiller("$fillerPrefix${fillerCounter++}"))
+            }
         }
     }
 }

@@ -104,6 +104,7 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                 span = { entry ->
                     when (entry) {
                         is GridEntry.Header, is GridEntry.Empty -> GridItemSpan(maxLineSpan)
+                        is GridEntry.RowFiller -> GridItemSpan(1)
                         is GridEntry.Cell -> if (cellSize(entry.state) == WidgetSize.FULL) GridItemSpan(maxLineSpan) else GridItemSpan(1)
                     }
                 },
@@ -131,6 +132,11 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                         modifier = Modifier
                             .animateItem()
                             .bindBounds(entry.key, controller.dragBounds),
+                    )
+                    is GridEntry.RowFiller -> RowFillerCell(
+                        targetKey = entry.key,
+                        controller = controller,
+                        modifier = Modifier.animateItem(),
                     )
                     is GridEntry.Cell -> when (val s = entry.state) {
                         is WidgetState.Loaded -> WidgetCard(
@@ -207,42 +213,24 @@ private fun WidgetCard(
 ) {
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
     val scale by animateFloatAsState(if (isBeingDragged) 1.05f else 1f, label = "drag-scale")
-    val height = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
-
-    // Outer Box reserves layout space for the overhanging button (top + start padding).
-    // Inner Box holds the actual widget visual and owns BOTH the drop-target rect (bindBounds)
-    // and the drag source. Aligning these on the inner Box means adjacent cells' rects don't
-    // overlap in the overhang region — eliminating the cross-cell hover flicker.
-    Box(modifier = modifier.padding(top = OVERHANG_DP, start = OVERHANG_DP)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(height)
-                .alpha(if (isBeingDragged) 0f else 1f)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .bindBounds(widget.id, controller.dragBounds)
-                .dragSource(
-                    widget = widget,
-                    controller = controller,
-                    onDragStart = onDragStart,
-                    onDragHover = onDragHover,
-                    onDragCommit = onDragCommit,
-                ),
-        ) {
-            WidgetCardContent(widget = widget, elevation = elevation)
-        }
-        TransferBadge(
-            widget = widget,
-            onClick = onTransfer,
-            isBeingDragged = isBeingDragged,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .offset(x = -OVERHANG_DP, y = -OVERHANG_DP),
-        )
-    }
+    WidgetCardShell(
+        widget = widget,
+        elevation = elevation,
+        scale = scale,
+        alpha = if (isBeingDragged) 0f else 1f,
+        onTransfer = onTransfer,
+        isBeingDragged = isBeingDragged,
+        modifier = modifier,
+        dragModifier = Modifier
+            .bindBounds(widget.id, controller.dragBounds)
+            .dragSource(
+                widget = widget,
+                controller = controller,
+                onDragStart = onDragStart,
+                onDragHover = onDragHover,
+                onDragCommit = onDragCommit,
+            ),
+    )
 }
 
 @Composable
@@ -251,28 +239,54 @@ private fun FloatingWidgetCard(widget: GenericWidget) {
     LaunchedEffect(Unit) { lifted = true }
     val elevation by animateDpAsState(if (lifted) 4.dp else 0.dp, label = "float-elevation")
     val scale by animateFloatAsState(if (lifted) 1.05f else 1f, label = "float-scale")
-    val height = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
+    WidgetCardShell(
+        widget = widget,
+        elevation = elevation,
+        scale = scale,
+        alpha = 1f,
+        onTransfer = null,
+        isBeingDragged = false,
+        modifier = Modifier.fillMaxWidth(if (widget.size == WidgetSize.FULL) 1f else 0.5f),
+    )
+}
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth(if (widget.size == WidgetSize.FULL) 1f else 0.5f)
-            .padding(top = OVERHANG_DP, start = OVERHANG_DP),
-    ) {
+/**
+ * Outer Box reserves layout space for the overhanging [TransferBadge] (top + start padding).
+ * Inner Box holds the visible card; [dragModifier] is where callers attach `bindBounds` /
+ * `dragSource` (or pass `Modifier` for the non-interactive floating overlay). Aligning those
+ * on the inner Box means adjacent cells' rects don't overlap in the overhang region —
+ * eliminating cross-cell hover flicker.
+ */
+@Composable
+private fun WidgetCardShell(
+    widget: GenericWidget,
+    elevation: Dp,
+    scale: Float,
+    alpha: Float,
+    onTransfer: (() -> Unit)?,
+    isBeingDragged: Boolean,
+    modifier: Modifier = Modifier,
+    dragModifier: Modifier = Modifier,
+) {
+    val height = if (widget.size == WidgetSize.FULL) 120.dp else 96.dp
+    Box(modifier = modifier.padding(top = OVERHANG_DP, start = OVERHANG_DP)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(height)
+                .alpha(alpha)
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
-                },
+                }
+                .then(dragModifier),
         ) {
             WidgetCardContent(widget = widget, elevation = elevation)
         }
         TransferBadge(
             widget = widget,
-            onClick = null,
-            isBeingDragged = false,
+            onClick = onTransfer,
+            isBeingDragged = isBeingDragged,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .offset(x = -OVERHANG_DP, y = -OVERHANG_DP),
@@ -348,6 +362,25 @@ private fun TransferBadge(
                 modifier = Modifier.padding(6.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun RowFillerCell(
+    targetKey: String,
+    controller: DragController,
+    modifier: Modifier = Modifier,
+) {
+    // Mirror small WidgetCard layout (outer Box with overhang padding → inner Box) so the
+    // filler's bindBounds rect lines up with adjacent cells' rects — no rect overlap, no gaps.
+    // Inner Box renders nothing visible; it exists purely to occupy the slot and be hit-tested.
+    Box(modifier = modifier.padding(top = OVERHANG_DP, start = OVERHANG_DP)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(96.dp)
+                .bindBounds(targetKey, controller.dragBounds),
+        )
     }
 }
 

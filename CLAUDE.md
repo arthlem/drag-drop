@@ -22,7 +22,7 @@ The drag pipeline is built directly on Compose Foundation primitives — `Modifi
 - **Sealed `GenericWidget` hierarchy carries the typed widget data.** Concrete data classes (`InvestmentEntryPoint`, `Pfm`, `Tile.{Monizze, Cashback, Pluxee}`) each carry `id` / `size` / `isInYourWidgets` and a polymorphic `toggleIsInYourWidgets(b)` that returns the same concrete subtype — reorder/transfer logic preserves widget type without `when`-branching. Per-type data fields (presentation payloads, balances, etc.) live on each impl.
 - **`WidgetState` is the cell's lifecycle state.** Three variants: `Skeleton(key, size)` and `Failure(key, size)` (placeholders with no widget data), and `Loaded(widget: GenericWidget)` — a thin wrapper marking "this slot has finished loading". The `widget` field is the only payload `Loaded` carries.
 - **`SnapshotStateList<GridEntry>` as source of truth.** Backed by a private `_entries`; the public view is `List<GridEntry>` (read-only). Compose still observes mutations because the underlying list is `SnapshotStateList`.
-- **Sealed `GridEntry` interface.** Three variants: `Header(key, title)`, `Cell(state: WidgetState)`, `Empty(key, message)`. `GridEntry.Cell.key` resolves to `state.widget.id` for `Loaded` and to `state.key` for `Skeleton`/`Failure`.
+- **Sealed `GridEntry` interface.** Four variants: `Header(key, title)`, `Cell(state: WidgetState)`, `Empty(key, message)`, `RowFiller(key)`. `GridEntry.Cell.key` resolves to `state.widget.id` for `Loaded` and to `state.key` for `Skeleton`/`Failure`. `RowFiller` is a 1-column invisible slot that fills out partial rows and acts as a first-class drop target — see "Empty-slot drops" below.
 - **Three-state UI.** `UiState.Loading` (6 skeletons in `_entries`, no headers, no drag), `UiState.Error(cause)` (empty `_entries`, `ErrorScreen` rendered instead of the grid), `UiState.Loaded` (full grid with headers, section partition, drag/drop). `UiState.Loading` and `UiState.Loaded` both render through the same `WidgetsContent` — only the `_entries` contents change.
 - **Single source of truth for `isInYourWidgets`.** Derived from list position relative to the Available header — never stored independently after initial load. `reconcileIsYoursForDraggedWidget` runs after each drag move and uses `current.toggleIsInYourWidgets(...)` to preserve the subtype.
 - **Deferred emissions during drag.** A `pendingEntries: List<WidgetState>?` field stores any flow emission that arrives mid-drag; `onDragCommit` / `onDragCancel` replay it via `flushPendingEntriesIfAny()` so a remote update cannot stomp on an active drag.
@@ -52,6 +52,20 @@ Releasing outside any drop target keeps the widget at its current visual positio
 | Other | Other | Revert to `originalIndex` (no in-section reorder) |
 
 The `+`/`−` button (`onTransfer`) is the only way to programmatically send a widget *to* Other from Yours; drag is the same fallback via the snap-to-top branch.
+
+### Empty-slot drops via `RowFiller`
+
+Mixed-span layouts leave gaps — e.g. `[m1(small), c1(small), p1(small), iep1(full)]` packs as `[m1, c1]` / `[p1, ⌧]` / `[iep1]`, with `⌧` an unfilled slot. To make `⌧` a real drop target (not a fallback heuristic), we represent it explicitly as a `GridEntry.RowFiller` in the entries list. The filler takes 1 grid column, renders invisibly, and registers `bindBounds` like any other cell.
+
+`onDragHover` resolves filler targets the same way as cells — `targetIndex = indexOfKey(fillerKey)` followed by the standard `removeAt + add` reorder. After every reorder, `reconcileRowFillers()` strips all fillers in each section and re-adds them at canonical positions (just before any full-span widget that follows a partial row, plus end-of-section if the last row is incomplete). So the *visible* drop position can shift as auto-pack repacks the section — the precision tradeoff is intentional.
+
+**Why always re-canonicalize (no skip-on-match):**
+- Preserving user-placed filler positions sounded right at first (drop-here-land-here precision), but a few sequential swaps could leave fillers in awkward spots — immediately after a section header (`[_, X] / …`), stranded between a full-span widget and a single trailing small widget, etc.
+- Always re-canonicalizing makes those states impossible by construction. Filler positions are deterministic given the (small, full) widget sequence per section.
+
+`reconcileRowFillers()` is called from: `rebuildEntriesFromWidgets`, `onTransfer`, `onDragHover`, `onDragCommit` (Yours→Other branch), `onDragCancel`. Filler keys are sequential strings (`filler_yours_0`, `filler_other_0`, …) regenerated on each pass. Stable enough for `animateItem()` because fillers are invisible.
+
+`RowFiller` is not a drag source (no `dragSource` modifier) — only a drop target.
 
 ### Hover hit-testing uses the floating widget's center, not the finger
 
@@ -150,7 +164,8 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 - File-level helpers: `hitTest(finger, bounds, draggedKey)`, `cellSize(state)`, `debugLabel(widget)`, `bindBounds(key, dragBounds)` (a `@Composable Modifier` extension), `rememberEdgeAutoScroll(lazyGridState)`, plus the `EdgeAutoScroll` private class.
 - `WidgetsContent` owns: `dragBounds`, `pressOffsetWithinCell`, `fingerInWindow`, `draggingWidget`, `boxCoords`, `lazyGridState`, `edgeAutoScroll`. It wraps the `LazyVerticalGrid` in an outer `Box` and renders the floating overlay as a sibling.
 - `HeaderCell`, `EmptyDropZone` are pure renderers — bounds registration happens via the `bindBounds` modifier on the call site, not inside the cell.
-- `WidgetCard` owns the gesture pipeline: a single `Modifier.pointerInput(widget.id)` runs the long-press detector, captures press state, drives drag through release, and stops auto-scroll in its `finally` block. Source-slot invisibility is `Modifier.alpha(if (isBeingDragged) 0f else 1f)`. Layout is an outer `Box` (overhang padding) wrapping an inner `Box` (visible card; carries `bindBounds` + `dragSource`) plus a sibling `TransferBadge` aligned to TopStart with negative offset.
+- `WidgetCard` owns the gesture pipeline: a single `Modifier.pointerInput(widget.id)` runs the long-press detector, captures press state, drives drag through release, and stops auto-scroll in its `finally` block. Source-slot invisibility is `Modifier.alpha(if (isBeingDragged) 0f else 1f)`.
+- `WidgetCardShell` owns the duplicated layout structure shared by `WidgetCard` and `FloatingWidgetCard`: outer `Box` (overhang padding) wrapping an inner `Box` (visible card) plus a sibling `TransferBadge` aligned to TopStart with negative offset. Callers pass animation values (`elevation`, `scale`, `alpha`) and a `dragModifier` slot — `WidgetCard` chains `bindBounds + dragSource` into it, `FloatingWidgetCard` passes `Modifier` (the floating overlay is non-interactive).
 - `TransferBadge` is the circular +/− button overhanging the top-left corner. Wired to `onTransfer` in `WidgetCard`; passed `onClick = null` in `FloatingWidgetCard` to render as a non-interactive twin during drag.
 - `FloatingWidgetCard` is a non-interactive renderer used only by the floating overlay.
 - `SkeletonCell`, `FailureCell` are render-only (no drag, no bounds registration).
@@ -163,7 +178,7 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 - `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` (`Skeleton`/`Failure`/`Loaded(widget: GenericWidget)`).
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsUseCase.kt` — `WidgetsUseCase` interface + `FakeWidgetsUseCase` returning `Either<Throwable, Flow<List<WidgetState>>>`.
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers, deferred-emission logic, skeleton seed.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `FloatingWidgetCard` / `WidgetCardContent` / `TransferBadge` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `cellSize` / `debugLabel`. Drag-pipeline helpers (`bindBounds`, `dragSource`, `DragController`, `rememberDragController`, `hitTest`, `rememberEdgeAutoScroll`, `EdgeAutoScroll`) live in `DragSupport.kt`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `FloatingWidgetCard` / `WidgetCardShell` / `WidgetCardContent` / `TransferBadge` / `RowFillerCell` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `cellSize` / `debugLabel`. Drag-pipeline helpers (`bindBounds`, `dragSource`, `DragController`, `rememberDragController`, `hitTest`, `rememberEdgeAutoScroll`, `EdgeAutoScroll`) live in `DragSupport.kt`.
 
 ## Initial test data
 
