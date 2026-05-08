@@ -210,6 +210,7 @@ class WidgetsViewModel(
             }
         }
         flushPendingEntriesIfAny()
+        persistYoursOrder()
     }
 
     fun onDragCancel() {
@@ -226,6 +227,7 @@ class WidgetsViewModel(
             reconcileEmptyPlaceholders()
         }
         flushPendingEntriesIfAny()
+        persistYoursOrder()
     }
 
     fun onTransfer(widgetId: String) {
@@ -242,12 +244,32 @@ class WidgetsViewModel(
             reconcileRowFillers()
             reconcileEmptyPlaceholders()
         }
+        persistYoursOrder()
     }
 
     private fun flushPendingEntriesIfAny() {
         val pending = pendingEntries ?: return
         pendingEntries = null
         rebuildEntriesFromWidgets(pending)
+    }
+
+    /**
+     * Walks `_entries` from the Yours header down to the Available header, collecting widget IDs
+     * for `Loaded` cells. Fillers and Empty placeholders are skipped. Fired off on a separate
+     * coroutine — fire-and-forget; persistence latency doesn't block UI updates.
+     */
+    private fun persistYoursOrder() {
+        val ids = yoursOrder()
+        viewModelScope.launch { useCase.saveYoursOrder(ids) }
+    }
+
+    private fun yoursOrder(): List<String> {
+        val yoursHeaderIdx = indexOfKey(YOURS_HEADER_KEY)
+        if (yoursHeaderIdx < 0) return emptyList()
+        val availableHeaderIdx = indexOfKey(AVAILABLE_HEADER_KEY).takeIf { it >= 0 } ?: _entries.size
+        if (yoursHeaderIdx + 1 >= availableHeaderIdx) return emptyList()
+        return _entries.subList(yoursHeaderIdx + 1, availableHeaderIdx)
+            .mapNotNull { ((it as? GridEntry.Cell)?.state as? WidgetState.Loaded)?.widget?.id }
     }
 
     private fun indexOfKey(key: String): Int = _entries.indexOfFirst { it.key == key }

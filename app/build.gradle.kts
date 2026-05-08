@@ -59,6 +59,7 @@ dependencies {
 	implementation(libs.androidx.compose.material.icons.extended)
 	debugImplementation(libs.androidx.compose.ui.tooling)
 	implementation(libs.arrow.core)
+	implementation(libs.androidx.datastore.preferences)
 
 	testImplementation(libs.junit)
 	androidTestImplementation(libs.androidx.junit)
