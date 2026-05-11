@@ -41,13 +41,6 @@ class FakeWidgetsUseCase(
 			WidgetState.Loaded(GenericWidget.Pfm(id = "pfm1", size = WidgetSize.FULL, isInYourWidgets = false)),
 			WidgetState.Loaded(GenericWidget.Tile.Pluxee(id = "p1", size = WidgetSize.SMALL, isInYourWidgets = false)),
 			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m2", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m3", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m4", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m5", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m6", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m7", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m8", size = WidgetSize.SMALL, isInYourWidgets = false)),
-			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m9", size = WidgetSize.FULL, isInYourWidgets = false)),
 		)
 	}
 

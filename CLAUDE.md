@@ -1,6 +1,6 @@
 # DragDrop — Widget Dashboard POC
 
-Proof-of-concept Android app: a draggable widget dashboard with two sections ("Your widgets" / "Other widgets") supporting reorder, cross-section transfer (drag or button), and mixed-span items inside a single `LazyVerticalGrid`.
+Proof-of-concept Android app: a draggable widget dashboard with two sections ("Your widgets" / "Other widgets") supporting reorder, cross-section transfer (drag or button), and mixed-span items inside a single `LazyVerticalGrid`. The widget section coexists with non-widget items (banner, footer, etc.) in the parent grid via a `LazyGridScope.widgetSection(…)` extension function — no nested grids. Widgets are reorderable only after the user enters **reorder mode** via a long-press contextual menu; default long-press opens the menu, reorder-mode long-press starts a drag.
 
 ## Hard constraint: no third-party reorder libraries
 
@@ -18,7 +18,7 @@ The drag pipeline is built directly on Compose Foundation primitives — `Modifi
 
 ## Architecture
 
-- **MVVM with strict separation.** `WidgetsViewModel` owns all mutation logic. `WidgetsScreen.kt` composables are pure renderers — they observe state and forward user input via callbacks.
+- **MVVM with strict separation.** `WidgetsViewModel` owns all mutation logic. `WidgetsScreen.kt` composables are pure renderers — they observe state and forward user input via callbacks. Reorder mode is a UI affordance and lives as `var reorderMode by remember { mutableStateOf(false) }` at the screen level — the ViewModel knows nothing about it.
 - **`WidgetsUseCase` is constructor-injected** into the ViewModel via Compose's `viewModelFactory` in `MainActivity`. The interface returns `Either<Throwable, Flow<List<WidgetState>>>` from `fetchWidgets()` — `Left` is a terminal eligibility-failure state (no flow exists to subscribe to); `Right` is the live widget stream. `FakeWidgetsUseCase` flips a `FAIL_ELIGIBILITY` constant to test the error path.
 - **Yours-section ordering is persisted** to `DataStore<Preferences>` (key `"yours_order"`, comma-delimited list of widget IDs). The use case has a second method `saveYoursOrder(ids)`; the ViewModel calls it from `onDragCommit` / `onDragCancel` / `onTransfer` (committed states only — drag-time hover swaps aren't persisted). On `fetchWidgets()`, the use case reads the saved order *once*, sorts `INITIAL_WIDGETS` so saved IDs become Yours in saved order and unsaved IDs default to Other. Saves are fire-and-forget via `viewModelScope.launch` and don't loop back into the active flow — avoids "save → re-emit → mid-drag entries reset" races.
 - **Sealed `GenericWidget` hierarchy carries the typed widget data.** Concrete data classes (`InvestmentEntryPoint`, `Pfm`, `Tile.{Monizze, Cashback, Pluxee}`) each carry `id` / `size` / `isInYourWidgets` and a polymorphic `toggleIsInYourWidgets(b)` that returns the same concrete subtype — reorder/transfer logic preserves widget type without `when`-branching. Per-type data fields (presentation payloads, balances, etc.) live on each impl.
@@ -33,6 +33,22 @@ The drag pipeline is built directly on Compose Foundation primitives — `Modifi
 - **Edge auto-scroll.** An `EdgeAutoScroll` helper drives `LazyGridState.scrollBy(velocity)` while the dragging finger sits within a 40 dp band at the top or bottom of the grid (inside the grid). Velocity ramps linearly from ~12 px/frame at the edge itself to 0 at 40 dp inside the grid. Stops on release / coroutine cancel. Mid-screen drags don't accidentally scroll the grid because the drag loop `change.consume()`s every pointer event during drag — `LazyVerticalGrid`'s built-in scroll detector never sees them, so this is the only path that can scroll during drag.
 - **Dynamic empty placeholders.** `reconcileEmptyPlaceholders()` strips all `GridEntry.Empty` entries and re-adds them based on section emptiness. Tail-first insertion order keeps the available header's index stable for the second insert without a re-lookup.
 - **Constants for section anchors.** `YOURS_HEADER_KEY` / `AVAILABLE_HEADER_KEY` / `YOURS_EMPTY_KEY` / `AVAILABLE_EMPTY_KEY`.
+
+## Reorder mode
+
+Default mode: long-press on a widget opens a `DropdownMenu` anchored to the cell. The menu lists per-widget actions (e.g. Cashback's "View transactions") plus common actions (`Reorder`, `Manage widgets`). Tapping `Reorder` flips `reorderMode = true`, which:
+
+- Unlocks the drag pipeline (long-press now starts a drag instead of opening the menu — `WidgetCard` swaps its `dragModifier` chain between `bindBounds + dragSource` and a `pointerInput { detectTapGestures(onLongPress = …) }`).
+- Shows the +/− `TransferBadge`s (driven by `WidgetCardShell`'s `showBadge` flag).
+- Renders a scrim cutout over everything *except* the widget section (top + bottom strips around the section's bounds; left/right not needed since the section spans full grid width).
+- Overlays a "Done" button at the top center.
+- `BackHandler(enabled = reorderMode)` exits the mode on system back.
+
+Widget-section bounds for the scrim are derived from `lazyGridState.layoutInfo.visibleItemsInfo` — items whose key matches a `GridEntry.key` belong to the section. The min/max Y of those visible items is wrapped in a `derivedStateOf` and consumed by `ReorderScrim`. If the section is fully scrolled off-screen, bounds is null and the scrim renders nothing (rare edge case in practice).
+
+### `WidgetMenuAction` typed hierarchy
+
+`WidgetMenuAction` is a sealed interface — common actions (`Reorder`, `ManageWidgets`) are top-level data objects, per-widget extras nest under per-type sealed interfaces (`WidgetMenuAction.Cashback.ViewTransactions`, `WidgetMenuAction.Pluxee.Settings`, etc.). `fun GenericWidget.menuActions(): List<WidgetMenuAction>` is an exhaustive `when` over the sealed `GenericWidget` hierarchy — adding a new widget type is a compile error until you add its menu config. `actionLabel(action)` is the parallel exhaustive `when` for display strings; localization-friendly without putting strings into the action hierarchy. The screen owns a single dispatcher: `(WidgetMenuAction, GenericWidget) -> Unit`. Per-widget actions in the POC are stubs (no-op) — add real handlers as needed.
 
 ## Drop semantics
 
@@ -180,7 +196,8 @@ Multi-step mutations (`onDragHover`, `onDragCancel`, `onTransfer`, the init bloc
 - `app/src/main/java/com/arthlem/dragdrop/WidgetState.kt` — `enum WidgetSize`, sealed `WidgetState` (`Skeleton`/`Failure`/`Loaded(widget: GenericWidget)`).
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsUseCase.kt` — `WidgetsUseCase` interface + `FakeWidgetsUseCase` returning `Either<Throwable, Flow<List<WidgetState>>>`.
 - `app/src/main/java/com/arthlem/dragdrop/WidgetsViewModel.kt` — state machine, mutation functions, reconciliation helpers, deferred-emission logic, skeleton seed.
-- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` / `HeaderCell` / `WidgetCard` / `FloatingWidgetCard` / `WidgetCardShell` / `WidgetCardContent` / `TransferBadge` / `RowFillerCell` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `cellSize` / `debugLabel`. Drag-pipeline helpers (`bindBounds`, `dragSource`, `DragController`, `rememberDragController`, `hitTest`, `rememberEdgeAutoScroll`, `EdgeAutoScroll`) live in `DragSupport.kt`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetsScreen.kt` — `WidgetsScreen` / `WidgetsContent` (parent screen with the LazyVerticalGrid + reorder-mode state + scrim + Done button + floating overlay) / `widgetSection` (the `LazyGridScope` extension that emits widget items) / `HeaderCell` / `WidgetCard` / `FloatingWidgetCard` / `WidgetCardShell` / `WidgetCardContent` / `TransferBadge` / `RowFillerCell` / `SkeletonCell` / `FailureCell` / `EmptyDropZone` / `ErrorScreen` / `BannerCard` / `FooterCard` / `ReorderScrim` / `DoneButton` / `cellSize` / `debugLabel`. Drag-pipeline helpers (`bindBounds`, `dragSource`, `DragController`, `rememberDragController`, `hitTest`, `rememberEdgeAutoScroll`, `EdgeAutoScroll`) live in `DragSupport.kt`.
+- `app/src/main/java/com/arthlem/dragdrop/WidgetMenuAction.kt` — `WidgetMenuAction` sealed hierarchy + `GenericWidget.menuActions()` extension + `actionLabel(action)`.
 
 ## Initial test data
 

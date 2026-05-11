@@ -2,12 +2,16 @@
 
 package com.arthlem.dragdrop
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,6 +25,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -31,14 +37,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +60,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -63,6 +74,7 @@ import kotlin.math.roundToInt
 
 private val OVERHANG_DP = 12.dp
 private val BADGE_SIZE_DP = 28.dp
+private const val SCRIM_ALPHA = 0.55f
 
 @Composable
 fun WidgetsScreen(viewModel: WidgetsViewModel) {
@@ -78,9 +90,24 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
     val entries: List<GridEntry> = viewModel.entries
     val dragState = viewModel.dragState
 
+    var reorderMode by remember { mutableStateOf(false) }
     var boxCoords: LayoutCoordinates? by remember { mutableStateOf(null) }
     val lazyGridState = rememberLazyGridState()
     val controller = rememberDragController(lazyGridState)
+
+    BackHandler(enabled = reorderMode) { reorderMode = false }
+
+    // Visible widget-section bounds, derived from LazyGridState's layout info. The widget section
+    // is identified by entry keys; banner / footer items have auto-keys that won't match. Bounds
+    // are in viewport coords (= local coords inside the parent Box, since the grid fills it).
+    val sectionBoundsLocal: Pair<Int, Int>? by remember(lazyGridState, entries) {
+        derivedStateOf {
+            val sectionKeys = entries.map { it.key }.toSet()
+            val infos = lazyGridState.layoutInfo.visibleItemsInfo.filter { it.key in sectionKeys }
+            if (infos.isEmpty()) null
+            else infos.minOf { it.offset.y } to infos.maxOf { it.offset.y + it.size.height }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -98,90 +125,226 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
                 .systemGestureExclusion()
                 .onGloballyPositioned { coords -> controller.edgeAutoScroll.bindGridBounds(coords) },
         ) {
-            items(
-                items = entries,
-                key = { it.key },
-                span = { entry ->
-                    when (entry) {
-                        is GridEntry.Header, is GridEntry.Empty -> GridItemSpan(maxLineSpan)
-                        is GridEntry.RowFiller -> GridItemSpan(1)
-                        is GridEntry.Cell -> if (cellSize(entry.state) == WidgetSize.FULL) GridItemSpan(maxLineSpan) else GridItemSpan(1)
+            // Non-widget items demonstrate the "general list with arbitrary items" structure —
+            // widget reordering must coexist with everything else in the same parent grid.
+            item(span = { GridItemSpan(maxLineSpan) }, key = "banner") {
+                BannerCard()
+            }
+
+            widgetSection(
+                entries = entries,
+                dragState = dragState,
+                controller = controller,
+                reorderMode = reorderMode,
+                onDragStart = { viewModel.onDragStart(it) },
+                onDragHover = { viewModel.onDragHover(it) },
+                onDragCommit = { viewModel.onDragCommit() },
+                onTransfer = { viewModel.onTransfer(it) },
+                onMenuAction = { action, _ ->
+                    when (action) {
+                        WidgetMenuAction.Reorder -> reorderMode = true
+                        // ManageWidgets and per-widget actions are stubs in the POC.
+                        else -> Unit
                     }
                 },
-                contentType = { entry ->
-                    when (entry) {
-                        is GridEntry.Cell -> when (entry.state) {
-                            is WidgetState.Loaded -> WidgetState.Loaded::class
-                            is WidgetState.Skeleton -> WidgetState.Skeleton::class
-                            is WidgetState.Failure -> WidgetState.Failure::class
-                        }
-                        else -> entry::class
-                    }
-                },
-            ) { entry ->
-                when (entry) {
-                    is GridEntry.Header -> HeaderCell(
-                        title = entry.title,
-                        modifier = Modifier
-                            .animateItem()
-                            .bindBounds(entry.key, controller.dragBounds),
-                    )
-                    is GridEntry.Empty -> EmptyDropZone(
-                        message = entry.message,
-                        isDragActive = dragState != null,
-                        modifier = Modifier
-                            .animateItem()
-                            .bindBounds(entry.key, controller.dragBounds),
-                    )
-                    is GridEntry.RowFiller -> RowFillerCell(
-                        targetKey = entry.key,
-                        controller = controller,
-                        modifier = Modifier.animateItem(),
-                    )
-                    is GridEntry.Cell -> when (val s = entry.state) {
-                        is WidgetState.Loaded -> WidgetCard(
-                            widget = s.widget,
-                            isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
-                            controller = controller,
-                            onDragStart = { viewModel.onDragStart(it) },
-                            onDragHover = { viewModel.onDragHover(it) },
-                            onDragCommit = { viewModel.onDragCommit() },
-                            onTransfer = { viewModel.onTransfer(s.widget.id) },
-                            modifier = Modifier.animateItem(),
-                        )
-                        is WidgetState.Skeleton -> SkeletonCell(
-                            size = s.size,
-                            modifier = Modifier.animateItem(),
-                        )
-                        is WidgetState.Failure -> FailureCell(
-                            size = s.size,
-                            modifier = Modifier.animateItem(),
-                        )
-                    }
-                }
+            )
+
+            item(span = { GridItemSpan(maxLineSpan) }, key = "footer") {
+                FooterCard()
             }
         }
 
+        // Reorder-mode visuals: scrim cutout (top + bottom strips around the widget section)
+        // and a centered Done button overlaid above the scrim.
+        if (reorderMode) {
+            ReorderScrim(sectionBoundsLocal = sectionBoundsLocal)
+            DoneButton(onClick = { reorderMode = false })
+        }
+
+        // Floating drag overlay (highest z so it paints above the scrim too).
         val finger = controller.fingerInWindow.value
         val widget = controller.draggingWidget.value
         if (finger != null && widget != null) {
             val boxOriginInWindow = boxCoords?.positionInWindow() ?: Offset.Zero
             val overhangPx = with(LocalDensity.current) { OVERHANG_DP.toPx() }
-            // Subtract OVERHANG_DP so the floating widget's *inner* Box (the visible card) lands
-            // where the source's inner Box was at long-press. Without this offset, the floating
-            // widget's outer Box top-left aligns with the source's inner Box top-left, and the
-            // floating outer's own 12dp top+start padding then pushes the visible card 12dp
-            // down-right — a small but noticeable jump at the moment drag begins.
             val floatingTopLeft = finger - controller.pressOffsetWithinCell.value -
                 boxOriginInWindow - Offset(overhangPx, overhangPx)
             Box(
                 modifier = Modifier
                     .offset { IntOffset(floatingTopLeft.x.roundToInt(), floatingTopLeft.y.roundToInt()) }
-                    .zIndex(1f),
+                    .zIndex(2f),
             ) {
                 FloatingWidgetCard(widget = widget)
             }
         }
+    }
+}
+
+/**
+ * Emits the widget entries (headers, cells, fillers, empty placeholders) into the parent
+ * [LazyVerticalGrid] via [LazyGridScope.items]. The drag pipeline (`bindBounds`, `dragSource`)
+ * only attaches when [reorderMode] is true; otherwise long-press opens a [DropdownMenu] of
+ * [WidgetMenuAction]s.
+ */
+private fun LazyGridScope.widgetSection(
+    entries: List<GridEntry>,
+    dragState: DragState?,
+    controller: DragController,
+    reorderMode: Boolean,
+    onDragStart: (String) -> Unit,
+    onDragHover: (String) -> Unit,
+    onDragCommit: () -> Unit,
+    onTransfer: (String) -> Unit,
+    onMenuAction: (WidgetMenuAction, GenericWidget) -> Unit,
+) {
+    items(
+        items = entries,
+        key = { it.key },
+        span = { entry ->
+            when (entry) {
+                is GridEntry.Header, is GridEntry.Empty -> GridItemSpan(maxLineSpan)
+                is GridEntry.RowFiller -> GridItemSpan(1)
+                is GridEntry.Cell -> if (cellSize(entry.state) == WidgetSize.FULL) GridItemSpan(maxLineSpan) else GridItemSpan(1)
+            }
+        },
+        contentType = { entry ->
+            when (entry) {
+                is GridEntry.Cell -> when (entry.state) {
+                    is WidgetState.Loaded -> WidgetState.Loaded::class
+                    is WidgetState.Skeleton -> WidgetState.Skeleton::class
+                    is WidgetState.Failure -> WidgetState.Failure::class
+                }
+                else -> entry::class
+            }
+        },
+    ) { entry ->
+        when (entry) {
+            is GridEntry.Header -> HeaderCell(
+                title = entry.title,
+                modifier = Modifier
+                    .animateItem()
+                    .bindBounds(entry.key, controller.dragBounds),
+            )
+            is GridEntry.Empty -> EmptyDropZone(
+                message = entry.message,
+                isDragActive = dragState != null,
+                modifier = Modifier
+                    .animateItem()
+                    .bindBounds(entry.key, controller.dragBounds),
+            )
+            is GridEntry.RowFiller -> RowFillerCell(
+                targetKey = entry.key,
+                controller = controller,
+                modifier = Modifier.animateItem(),
+            )
+            is GridEntry.Cell -> when (val s = entry.state) {
+                is WidgetState.Loaded -> WidgetCard(
+                    widget = s.widget,
+                    isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
+                    controller = controller,
+                    reorderMode = reorderMode,
+                    onDragStart = onDragStart,
+                    onDragHover = onDragHover,
+                    onDragCommit = onDragCommit,
+                    onTransfer = { onTransfer(s.widget.id) },
+                    onMenuAction = { action -> onMenuAction(action, s.widget) },
+                    modifier = Modifier.animateItem(),
+                )
+                is WidgetState.Skeleton -> SkeletonCell(
+                    size = s.size,
+                    modifier = Modifier.animateItem(),
+                )
+                is WidgetState.Failure -> FailureCell(
+                    size = s.size,
+                    modifier = Modifier.animateItem(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.ReorderScrim(sectionBoundsLocal: Pair<Int, Int>?) {
+    val density = LocalDensity.current
+    val (topPx, bottomPx) = sectionBoundsLocal ?: (0 to 0)
+    val topDp = with(density) { topPx.coerceAtLeast(0).toDp() }
+    val bottomDp = with(density) { bottomPx.coerceAtLeast(0).toDp() }
+
+    // Top strip: from screen top to widget section's top.
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(topDp)
+            .background(Color.Black.copy(alpha = SCRIM_ALPHA))
+            .pointerInput(Unit) { detectTapGestures(onPress = { /* swallow */ }) }
+            .zIndex(1f),
+    )
+    // Bottom strip: from widget section's bottom to screen bottom. fillMaxSize + padding-top
+    // gives us "everything below this Y," which is what we want.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = bottomDp)
+            .background(Color.Black.copy(alpha = SCRIM_ALPHA))
+            .pointerInput(Unit) { detectTapGestures(onPress = { /* swallow */ }) }
+            .zIndex(1f),
+    )
+}
+
+@Composable
+private fun BoxScope.DoneButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 32.dp)
+            .zIndex(1.5f),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Button(onClick = onClick) {
+            Text("Done")
+        }
+    }
+}
+
+@Composable
+private fun BannerCard() {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 80.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text(
+                text = "Welcome to your dashboard",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FooterCard() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "End of dashboard",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -205,23 +368,24 @@ private fun WidgetCard(
     widget: GenericWidget,
     isBeingDragged: Boolean,
     controller: DragController,
+    reorderMode: Boolean,
     onDragStart: (String) -> Unit,
     onDragHover: (String) -> Unit,
     onDragCommit: () -> Unit,
     onTransfer: () -> Unit,
+    onMenuAction: (WidgetMenuAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val elevation by animateDpAsState(if (isBeingDragged) 4.dp else 0.dp, label = "drag-elevation")
     val scale by animateFloatAsState(if (isBeingDragged) 1.05f else 1f, label = "drag-scale")
-    WidgetCardShell(
-        widget = widget,
-        elevation = elevation,
-        scale = scale,
-        alpha = if (isBeingDragged) 0f else 1f,
-        onTransfer = onTransfer,
-        isBeingDragged = isBeingDragged,
-        modifier = modifier,
-        dragModifier = Modifier
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    // The behaviour switch: long-press → drag (reorder mode) vs. long-press → menu (default).
+    // Both modifiers are pointerInput-based; swapping the entire chain is fine because Compose
+    // disposes the old layout-node modifiers and instantiates the new ones, restarting the
+    // pointerInput coroutine.
+    val behaviorModifier: Modifier = if (reorderMode) {
+        Modifier
             .bindBounds(widget.id, controller.dragBounds)
             .dragSource(
                 widget = widget,
@@ -229,8 +393,40 @@ private fun WidgetCard(
                 onDragStart = onDragStart,
                 onDragHover = onDragHover,
                 onDragCommit = onDragCommit,
-            ),
-    )
+            )
+    } else {
+        Modifier.pointerInput(widget.id) {
+            detectTapGestures(onLongPress = { menuExpanded = true })
+        }
+    }
+
+    Box(modifier = modifier) {
+        WidgetCardShell(
+            widget = widget,
+            elevation = elevation,
+            scale = scale,
+            alpha = if (isBeingDragged) 0f else 1f,
+            onTransfer = onTransfer,
+            isBeingDragged = isBeingDragged,
+            showBadge = reorderMode,
+            dragModifier = behaviorModifier,
+        )
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+        ) {
+            widget.menuActions().forEach { action ->
+                DropdownMenuItem(
+                    text = { Text(actionLabel(action)) },
+                    onClick = {
+                        menuExpanded = false
+                        onMenuAction(action)
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -246,6 +442,7 @@ private fun FloatingWidgetCard(widget: GenericWidget) {
         alpha = 1f,
         onTransfer = null,
         isBeingDragged = false,
+        showBadge = true,
         modifier = Modifier.fillMaxWidth(if (widget.size == WidgetSize.FULL) 1f else 0.5f),
     )
 }
@@ -253,7 +450,7 @@ private fun FloatingWidgetCard(widget: GenericWidget) {
 /**
  * Outer Box reserves layout space for the overhanging [TransferBadge] (top + start padding).
  * Inner Box holds the visible card; [dragModifier] is where callers attach `bindBounds` /
- * `dragSource` (or pass `Modifier` for the non-interactive floating overlay). Aligning those
+ * `dragSource` (or the long-press → menu pointerInput in default mode). Aligning those
  * on the inner Box means adjacent cells' rects don't overlap in the overhang region —
  * eliminating cross-cell hover flicker.
  */
@@ -265,6 +462,7 @@ private fun WidgetCardShell(
     alpha: Float,
     onTransfer: (() -> Unit)?,
     isBeingDragged: Boolean,
+    showBadge: Boolean,
     modifier: Modifier = Modifier,
     dragModifier: Modifier = Modifier,
 ) {
@@ -283,14 +481,16 @@ private fun WidgetCardShell(
         ) {
             WidgetCardContent(widget = widget, elevation = elevation)
         }
-        TransferBadge(
-            widget = widget,
-            onClick = onTransfer,
-            isBeingDragged = isBeingDragged,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .offset(x = -OVERHANG_DP, y = -OVERHANG_DP),
-        )
+        if (showBadge) {
+            TransferBadge(
+                widget = widget,
+                onClick = onTransfer,
+                isBeingDragged = isBeingDragged,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = -OVERHANG_DP, y = -OVERHANG_DP),
+            )
+        }
     }
 }
 
@@ -371,9 +571,6 @@ private fun RowFillerCell(
     controller: DragController,
     modifier: Modifier = Modifier,
 ) {
-    // Mirror small WidgetCard layout (outer Box with overhang padding → inner Box) so the
-    // filler's bindBounds rect lines up with adjacent cells' rects — no rect overlap, no gaps.
-    // Inner Box renders nothing visible; it exists purely to occupy the slot and be hit-tested.
     Box(modifier = modifier.padding(top = OVERHANG_DP, start = OVERHANG_DP)) {
         Box(
             modifier = Modifier
