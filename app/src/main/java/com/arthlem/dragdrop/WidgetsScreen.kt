@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -56,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -507,19 +509,114 @@ private fun WidgetCardContent(
             .shadow(elevation, RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = debugLabel(widget),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-            )
+        when (widget) {
+            is GenericWidget.Tile.Cashback -> CashbackBody(widget)
+            else -> DefaultDebugBody(widget)
         }
     }
+}
+
+@Composable
+private fun DefaultDebugBody(widget: GenericWidget) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = debugLabel(widget),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun CashbackBody(widget: GenericWidget.Tile.Cashback) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = "Easy Cashback",
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            text = "Your offers",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        if (widget.offers.isNotEmpty()) {
+            OfferStrip(offers = widget.offers)
+        }
+    }
+}
+
+@Composable
+private fun OfferStrip(offers: List<GenericWidget.Offer>) {
+    val visible = offers.take(3)
+    val overflow = (offers.size - visible.size).coerceAtLeast(0)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        visible.forEach { offer ->
+            OfferTile(offer = offer, modifier = Modifier.weight(1f))
+        }
+        if (overflow > 0) {
+            OverflowTile(count = overflow, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun OfferTile(offer: GenericWidget.Offer, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = offer.initial,
+            color = brandColor(offer.palette),
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun OverflowTile(count: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "+$count",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun brandColor(palette: GenericWidget.BrandPalette): Color = when (palette) {
+    GenericWidget.BrandPalette.Nike -> Color.Black
+    GenericWidget.BrandPalette.Levis -> Color(0xFFCC0000)
+    GenericWidget.BrandPalette.Diesel -> Color(0xFFE60012)
+    GenericWidget.BrandPalette.Adidas -> Color.Black
+    GenericWidget.BrandPalette.Zara -> Color.Black
+    GenericWidget.BrandPalette.HM -> Color(0xFFE50010)
+    GenericWidget.BrandPalette.Apple -> Color.Black
+    GenericWidget.BrandPalette.Samsung -> Color(0xFF1428A0)
+    GenericWidget.BrandPalette.Ikea -> Color(0xFF0058A3)
+    GenericWidget.BrandPalette.Generic -> Color.DarkGray
 }
 
 @Composable

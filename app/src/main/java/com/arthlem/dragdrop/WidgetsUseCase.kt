@@ -36,7 +36,24 @@ class FakeWidgetsUseCase(
 
 		private val INITIAL_WIDGETS: List<WidgetState> = listOf(
 			WidgetState.Loaded(GenericWidget.Tile.Monizze(id = "m1", size = WidgetSize.SMALL, isInYourWidgets = true)),
-			WidgetState.Loaded(GenericWidget.Tile.Cashback(id = "c1", size = WidgetSize.SMALL, isInYourWidgets = true)),
+			WidgetState.Loaded(
+				GenericWidget.Tile.Cashback(
+					id = "c1",
+					size = WidgetSize.SMALL,
+					isInYourWidgets = true,
+					offers = listOf(
+						GenericWidget.Offer("Nike", "N", GenericWidget.BrandPalette.Nike),
+						GenericWidget.Offer("Levi's", "L", GenericWidget.BrandPalette.Levis),
+						GenericWidget.Offer("Diesel", "di!", GenericWidget.BrandPalette.Diesel),
+						GenericWidget.Offer("Adidas", "A", GenericWidget.BrandPalette.Adidas),
+						GenericWidget.Offer("Zara", "Z", GenericWidget.BrandPalette.Zara),
+						GenericWidget.Offer("H&M", "H", GenericWidget.BrandPalette.HM),
+						GenericWidget.Offer("Apple", "A", GenericWidget.BrandPalette.Apple),
+						GenericWidget.Offer("Samsung", "S", GenericWidget.BrandPalette.Samsung),
+						GenericWidget.Offer("IKEA", "I", GenericWidget.BrandPalette.Ikea),
+					),
+				),
+			),
 			WidgetState.Loaded(GenericWidget.InvestmentEntryPoint(id = "iep1", size = WidgetSize.FULL, isInYourWidgets = true)),
 			WidgetState.Loaded(GenericWidget.Pfm(id = "pfm1", size = WidgetSize.FULL, isInYourWidgets = false)),
 			WidgetState.Loaded(GenericWidget.Tile.Pluxee(id = "p1", size = WidgetSize.SMALL, isInYourWidgets = false)),

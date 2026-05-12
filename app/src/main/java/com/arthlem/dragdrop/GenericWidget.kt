@@ -24,6 +24,25 @@ sealed interface GenericWidget {
             copy(isInYourWidgets = shouldBeInYourWidgets)
     }
 
+    data class Offer(
+        val name: String,
+        val initial: String,
+        val palette: BrandPalette,
+    )
+
+    enum class BrandPalette {
+        Nike,
+        Levis,
+        Diesel,
+        Adidas,
+        Zara,
+        HM,
+        Apple,
+        Samsung,
+        Ikea,
+        Generic,
+    }
+
     sealed interface Tile : GenericWidget {
         data class Monizze(
             override val id: String,
@@ -38,6 +57,7 @@ sealed interface GenericWidget {
             override val id: String,
             override val size: WidgetSize,
             override val isInYourWidgets: Boolean,
+            val offers: List<Offer> = emptyList(),
         ) : Tile {
             override fun toggleIsInYourWidgets(shouldBeInYourWidgets: Boolean): Cashback =
                 copy(isInYourWidgets = shouldBeInYourWidgets)
