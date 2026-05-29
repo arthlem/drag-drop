@@ -8,7 +8,6 @@ package com.arthlem.dragdrop
  * `actionLabel`'s `when` is exhaustive, the compiler will fail builds that miss a label.
  */
 sealed interface WidgetMenuAction {
-    data object Reorder : WidgetMenuAction
     data object ManageWidgets : WidgetMenuAction
 
     sealed interface InvestmentEntryPoint : WidgetMenuAction {
@@ -35,8 +34,9 @@ sealed interface WidgetMenuAction {
 
 /**
  * Per-widget menu config. Per-type items first (so they appear at the top of the menu),
- * common items (Reorder, Manage widgets) appended last. Exhaustive `when` over
- * [GenericWidget] forces every new widget type to make an explicit choice here.
+ * common items (Manage widgets) appended last. Exhaustive `when` over [GenericWidget]
+ * forces every new widget type to make an explicit choice here. Reordering is no longer a
+ * menu item — a long-press that drags past the touch slop starts a reorder directly.
  */
 fun GenericWidget.menuActions(): List<WidgetMenuAction> = buildList {
     when (this@menuActions) {
@@ -49,12 +49,10 @@ fun GenericWidget.menuActions(): List<WidgetMenuAction> = buildList {
         is GenericWidget.Tile.Pluxee -> add(WidgetMenuAction.Pluxee.Settings)
         is GenericWidget.Tile.Monizze -> add(WidgetMenuAction.Monizze.Topup)
     }
-    add(WidgetMenuAction.Reorder)
     add(WidgetMenuAction.ManageWidgets)
 }
 
 fun actionLabel(action: WidgetMenuAction): String = when (action) {
-    WidgetMenuAction.Reorder -> "Reorder"
     WidgetMenuAction.ManageWidgets -> "Manage widgets"
     WidgetMenuAction.InvestmentEntryPoint.Buy -> "Buy"
     WidgetMenuAction.InvestmentEntryPoint.Sell -> "Sell"

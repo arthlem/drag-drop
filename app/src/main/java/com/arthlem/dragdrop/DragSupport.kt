@@ -35,6 +35,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val LONG_PRESS_TIMEOUT_MS = 400L
 
@@ -83,10 +84,17 @@ fun Modifier.bindBounds(
 }
 
 /**
- * Per-cell drag-source modifier. Detects a 200 ms long-press, then drives the drag through
- * release: writes [DragController.pressOffsetWithinCell] / [DragController.fingerInWindow] /
- * [DragController.draggingWidget], hit-tests against [DragController.dragBounds], invokes
- * the callbacks, and runs [DragController.edgeAutoScroll] near grid edges. Cleans up in `finally`.
+ * Per-cell drag-source modifier with a unified long-press gesture:
+ *
+ * 1. A successful long-press ([LONG_PRESS_TIMEOUT_MS]) opens the contextual menu via
+ *    [setMenuExpanded]`(true)` — the finger stays down and armed.
+ * 2. If the still-pressed finger then moves past `viewConfiguration.touchSlop`, the menu is
+ *    dismissed ([setMenuExpanded]`(false)`) and the drag begins — no separate "reorder mode".
+ * 3. If the finger lifts before crossing the slop, the menu simply stays open (plain long-press).
+ *
+ * Once dragging, it writes [DragController.pressOffsetWithinCell] / [DragController.fingerInWindow] /
+ * [DragController.draggingWidget], hit-tests against [DragController.dragBounds], invokes the
+ * callbacks, and runs [DragController.edgeAutoScroll] near grid edges. Cleans up in `finally`.
  */
 @Composable
 fun Modifier.dragSource(
@@ -95,11 +103,13 @@ fun Modifier.dragSource(
     onDragStart: (String) -> Unit,
     onDragHover: (String) -> Unit,
     onDragCommit: () -> Unit,
+    setMenuExpanded: (Boolean) -> Unit,
 ): Modifier {
     val widgetId = widget.id
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val currentOnDragHover by rememberUpdatedState(onDragHover)
     val currentOnDragCommit by rememberUpdatedState(onDragCommit)
+    val currentSetMenuExpanded by rememberUpdatedState(setMenuExpanded)
     var cellCoords: LayoutCoordinates? by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     return this
@@ -119,9 +129,34 @@ fun Modifier.dragSource(
 
                 if (longPressed != true) return@awaitEachGesture
 
+                // Long-press fired: open the menu and arm for a possible drag. Don't start the
+                // drag yet — wait to see if the finger lifts (menu stays) or drags (menu goes).
+                currentSetMenuExpanded(true)
+
+                // Phase: watch the still-down finger. Consume here too — past the long-press we're
+                // committed to either the menu or a drag, never a grid scroll, so claiming these
+                // events keeps the grid from sliding under the open menu.
+                var dragStartPosition: Offset? = null
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val change = ev.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) {
+                        // Lifted without dragging — leave the menu open, end the gesture.
+                        return@awaitEachGesture
+                    }
+                    change.consume()
+                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                        dragStartPosition = change.position
+                        break
+                    }
+                }
+                val startPosition = dragStartPosition ?: return@awaitEachGesture
+
+                // Crossed the slop: hand off from menu to drag.
+                currentSetMenuExpanded(false)
                 controller.pressOffsetWithinCell.value = down.position
                 val cellOrigin = cellCoords?.boundsInWindow()?.topLeft ?: Offset.Zero
-                controller.fingerInWindow.value = cellOrigin + down.position
+                controller.fingerInWindow.value = cellOrigin + startPosition
                 controller.draggingWidget.value = widget
                 currentOnDragStart(widgetId)
 
