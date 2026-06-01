@@ -1,14 +1,17 @@
-@file:OptIn(ExperimentalFoundationApi::class)
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 
 package com.arthlem.dragdrop
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,18 +36,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MediumTopAppBar
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,19 +71,22 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
 
 private val OVERHANG_DP = 12.dp
 private val BADGE_SIZE_DP = 28.dp
+private const val SCRIM_ALPHA = 0.55f
 
 @Composable
 fun WidgetsScreen(viewModel: WidgetsViewModel) {
@@ -85,63 +102,128 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
     val entries: List<GridEntry> = viewModel.entries
     val dragState = viewModel.dragState
 
-    var boxCoords: LayoutCoordinates? by remember { mutableStateOf(null) }
+    var reorderMode by remember { mutableStateOf(true) }
     val lazyGridState = rememberLazyGridState()
     val controller = rememberDragController(lazyGridState)
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { coords -> boxCoords = coords },
-    ) {
-        LazyVerticalGrid(
-            state = lazyGridState,
-            columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier
-                .fillMaxSize()
-                .systemGestureExclusion()
-                .onGloballyPositioned { coords -> controller.edgeAutoScroll.bindGridBounds(coords) },
-        ) {
-            // Non-widget items demonstrate the "general list with arbitrary items" structure —
-            // widget reordering must coexist with everything else in the same parent grid.
-            item(span = { GridItemSpan(maxLineSpan) }, key = "banner") {
-                BannerCard()
-            }
 
-            widgetSection(
-                entries = entries,
-                dragState = dragState,
-                controller = controller,
-                onDragStart = { viewModel.onDragStart(it) },
-                onDragHover = { viewModel.onDragHover(it) },
-                onDragCommit = { viewModel.onDragCommit() },
-                onTransfer = { viewModel.onTransfer(it) },
-                // ManageWidgets and per-widget actions are stubs in the POC.
-                onMenuAction = { _, _ -> },
-            )
+    // TopAppBar scroll behaviour swap: out of reorder mode the bar collapses normally; in
+    // reorder mode it stays pinned so it doesn't animate in/out while the user drags. The
+    // state isn't shared between the two behaviours — entering reorder mode resets the bar
+    // to its expanded height, which is a known POC limitation.
+    val collapsibleScrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scrollBehavior = collapsibleScrollBehavior
 
-            item(span = { GridItemSpan(maxLineSpan) }, key = "footer") {
-                FooterCard()
+    // Window-coord positions captured from the LazyGrid and TopAppBar slots; consumed by the
+    // root-level scrim, Done bar, and the reorder overlay that mirrors widget positions.
+    var gridLeftInWindow by remember { mutableStateOf(0) }
+    var gridTopInWindow by remember { mutableStateOf(0) }
+    var topBarBottomInWindow by remember { mutableStateOf(0) }
+
+    // Root-level Box wraps the Scaffold; scrim, Done bar, and the floating-widget Popup are
+    // siblings of the Scaffold so they can paint above the TopAppBar / NavigationBar.
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+            topBar = {
+                MediumTopAppBar(
+                    title = { Text("Dashboard") },
+                    scrollBehavior = scrollBehavior,
+                    modifier = Modifier.onGloballyPositioned { coords ->
+                        topBarBottomInWindow = coords.boundsInWindow().bottom.toInt()
+                    },
+                )
+            },
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = true,
+                        onClick = {},
+                        icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                        label = { Text("Home") },
+                    )
+                    NavigationBarItem(
+                        selected = false,
+                        onClick = {},
+                        icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        label = { Text("Search") },
+                    )
+                    NavigationBarItem(
+                        selected = false,
+                        onClick = {},
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        label = { Text("Settings") },
+                    )
+                }
+            },
+        ) { innerPadding ->
+            LazyVerticalGrid(
+                state = lazyGridState,
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+                    .systemGestureExclusion()
+                    .onGloballyPositioned { coords ->
+                        controller.edgeAutoScroll.bindGridBounds(coords)
+                        val rect = coords.boundsInWindow()
+                        gridTopInWindow = rect.top.toInt()
+                        gridLeftInWindow = rect.left.toInt()
+                    },
+            ) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "banner") {
+                    BannerCard()
+                }
+
+                widgetSection(
+                    entries = entries,
+                    dragState = dragState,
+                    controller = controller,
+                    reorderMode = reorderMode,
+                    onDragStart = { viewModel.onDragStart(it) },
+                    onDragHover = { viewModel.onDragHover(it) },
+                    onDragCommit = { viewModel.onDragCommit() },
+                    onTransfer = { viewModel.onTransfer(it) },
+                    onMenuAction = { action, _ ->
+                        when (action) {
+                            //WidgetMenuAction.Reorder -> reorderMode = true
+                            else -> Unit
+                        }
+                    },
+                )
+
+                item(span = { GridItemSpan(maxLineSpan) }, key = "footer") {
+                    FooterCard()
+                }
             }
         }
 
-        // Floating drag overlay.
+        // Edge-to-edge scrim (no cutout), then a duplicate of the widget section rendered above
+        // it. The duplicate mirrors each visible item's position from `lazyGridState.layoutInfo`,
+        // so it lines up pixel-perfectly with the originals underneath the scrim. The duplicate's
+        // items are interactive (they sit above the scrim in z-order); the originals are inert
+        // because the scrim swallows touches in the regions between duplicate items.
+
+        // Floating drag overlay as a Popup so it paints above the TopAppBar / NavigationBar /
+        // scrim. Popup positions in window coords directly (no boxOrigin subtraction needed —
+        // the Popup's anchor is the screen-root Box at (0, 0)).
         val finger = controller.fingerInWindow.value
-        val widget = controller.draggingWidget.value
-        if (finger != null && widget != null) {
-            val boxOriginInWindow = boxCoords?.positionInWindow() ?: Offset.Zero
+        val draggingWidget = controller.draggingWidget.value
+        if (finger != null && draggingWidget != null) {
             val overhangPx = with(LocalDensity.current) { OVERHANG_DP.toPx() }
-            val floatingTopLeft = finger - controller.pressOffsetWithinCell.value -
-                boxOriginInWindow - Offset(overhangPx, overhangPx)
-            Box(
-                modifier = Modifier
-                    .offset { IntOffset(floatingTopLeft.x.roundToInt(), floatingTopLeft.y.roundToInt()) }
-                    .zIndex(2f),
+            val floatingWindowPos = finger - controller.pressOffsetWithinCell.value -
+                Offset(overhangPx, overhangPx)
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(
+                    floatingWindowPos.x.roundToInt(),
+                    floatingWindowPos.y.roundToInt(),
+                ),
             ) {
-                FloatingWidgetCard(widget = widget)
+                FloatingWidgetCard(widget = draggingWidget)
             }
         }
     }
@@ -149,14 +231,15 @@ private fun WidgetsContent(viewModel: WidgetsViewModel) {
 
 /**
  * Emits the widget entries (headers, cells, fillers, empty placeholders) into the parent
- * [LazyVerticalGrid] via [LazyGridScope.items]. Every cell carries the unified drag pipeline
- * (`bindBounds` + `dragSource`): a long-press opens a [DropdownMenu] of [WidgetMenuAction]s, and
- * dragging past the touch slop converts that press into a reorder drag.
+ * [LazyVerticalGrid] via [LazyGridScope.items]. The drag pipeline (`bindBounds`, `dragSource`)
+ * only attaches when [reorderMode] is true; otherwise long-press opens a [DropdownMenu] of
+ * [WidgetMenuAction]s.
  */
 private fun LazyGridScope.widgetSection(
     entries: List<GridEntry>,
     dragState: DragState?,
     controller: DragController,
+    reorderMode: Boolean,
     onDragStart: (String) -> Unit,
     onDragHover: (String) -> Unit,
     onDragCommit: () -> Unit,
@@ -208,6 +291,7 @@ private fun LazyGridScope.widgetSection(
                     widget = s.widget,
                     isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
                     controller = controller,
+                    reorderMode = reorderMode,
                     onDragStart = onDragStart,
                     onDragHover = onDragHover,
                     onDragCommit = onDragCommit,
@@ -223,6 +307,133 @@ private fun LazyGridScope.widgetSection(
                     size = s.size,
                     modifier = Modifier.animateItem(),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.ReorderScrim() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = SCRIM_ALPHA))
+            .pointerInput(Unit) { detectTapGestures(onPress = { /* swallow */ }) }
+            .zIndex(1f),
+    )
+}
+
+/**
+ * Duplicate of the widget section rendered above the scrim. Iterates
+ * `lazyGridState.layoutInfo.visibleItemsInfo`, filters to section entries, and renders each
+ * one as a Box absolutely positioned at the original's window coords. The duplicate items
+ * carry the drag pipeline (bindBounds + dragSource) just like the originals; both layers'
+ * `bindBounds` write to the same `dragBounds` map but at the same position, so hit-testing
+ * is consistent. Touches reach the duplicate (higher z-index than the scrim); the original
+ * underneath is shielded by the scrim.
+ */
+@Composable
+private fun BoxScope.ReorderOverlay(
+    entries: List<GridEntry>,
+    dragState: DragState?,
+    lazyGridState: LazyGridState,
+    controller: DragController,
+    gridLeftInWindow: Int,
+    gridTopInWindow: Int,
+    onDragStart: (String) -> Unit,
+    onDragHover: (String) -> Unit,
+    onDragCommit: () -> Unit,
+    onTransfer: (String) -> Unit,
+) {
+    val density = LocalDensity.current
+    val sectionKeys = remember(entries) { entries.map { it.key }.toSet() }
+    val visibleSection by remember(lazyGridState, sectionKeys) {
+        derivedStateOf {
+            lazyGridState.layoutInfo.visibleItemsInfo.filter { it.key in sectionKeys }
+        }
+    }
+
+    visibleSection.forEach { info ->
+        val entry = entries.firstOrNull { it.key == info.key } ?: return@forEach
+        val widthDp = with(density) { info.size.width.toDp() }
+        val heightDp = with(density) { info.size.height.toDp() }
+        val x = info.offset.x + gridLeftInWindow
+        val y = info.offset.y + gridTopInWindow
+
+        androidx.compose.runtime.key(entry.key) {
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(x, y) }
+                    .size(width = widthDp, height = heightDp)
+                    .zIndex(2f),
+            ) {
+                when (entry) {
+                    is GridEntry.Header -> HeaderCell(
+                        title = entry.title,
+                        modifier = Modifier.bindBounds(entry.key, controller.dragBounds),
+                    )
+                    is GridEntry.Empty -> EmptyDropZone(
+                        message = entry.message,
+                        isDragActive = dragState != null,
+                        modifier = Modifier.bindBounds(entry.key, controller.dragBounds),
+                    )
+                    is GridEntry.RowFiller -> RowFillerCell(
+                        targetKey = entry.key,
+                        controller = controller,
+                    )
+                    is GridEntry.Cell -> when (val s = entry.state) {
+                        is WidgetState.Loaded -> WidgetCard(
+                            widget = s.widget,
+                            isBeingDragged = dragState?.draggedWidget?.id == s.widget.id,
+                            controller = controller,
+                            reorderMode = true,
+                            onDragStart = onDragStart,
+                            onDragHover = onDragHover,
+                            onDragCommit = onDragCommit,
+                            onTransfer = { onTransfer(s.widget.id) },
+                            onMenuAction = { /* unused: menu can't open in reorder mode */ },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        is WidgetState.Skeleton -> SkeletonCell(
+                            size = s.size,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        is WidgetState.Failure -> FailureCell(
+                            size = s.size,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Solid `Surface` strip pinned directly below the TopAppBar. Holds the "Done" button that
+ * exits reorder mode. Rendered above scrim + overlay ([zIndex] 3f) so it stays readable
+ * even if a duplicate item would otherwise sit under the same Y range. [topOffsetPx] is
+ * the TopAppBar's bottom in window coords, captured via `onGloballyPositioned`.
+ */
+@Composable
+private fun BoxScope.DoneBar(topOffsetPx: Int, onClick: () -> Unit) {
+    val topOffsetDp = with(LocalDensity.current) { topOffsetPx.toDp() }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset(y = topOffsetDp)
+            .zIndex(3f),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 4.dp,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            TextButton(onClick = onClick) {
+                Text("Done")
             }
         }
     }
@@ -290,6 +501,7 @@ private fun WidgetCard(
     widget: GenericWidget,
     isBeingDragged: Boolean,
     controller: DragController,
+    reorderMode: Boolean,
     onDragStart: (String) -> Unit,
     onDragHover: (String) -> Unit,
     onDragCommit: () -> Unit,
@@ -301,19 +513,26 @@ private fun WidgetCard(
     val scale by animateFloatAsState(if (isBeingDragged) 1.05f else 1f, label = "drag-scale")
     var menuExpanded by remember { mutableStateOf(false) }
 
-    // Unified gesture: a long-press opens the menu; if the finger then drags past the touch
-    // slop, the menu dismisses and the drag begins (see Modifier.dragSource). No separate
-    // "reorder mode" toggle — every card is always a drop target and a drag source.
-    val behaviorModifier: Modifier = Modifier
-        .bindBounds(widget.id, controller.dragBounds)
-        .dragSource(
-            widget = widget,
-            controller = controller,
-            onDragStart = onDragStart,
-            onDragHover = onDragHover,
-            onDragCommit = onDragCommit,
-            setMenuExpanded = { menuExpanded = it },
-        )
+    // The behaviour switch: long-press → drag (reorder mode) vs. long-press → menu (default).
+    // Both modifiers are pointerInput-based; swapping the entire chain is fine because Compose
+    // disposes the old layout-node modifiers and instantiates the new ones, restarting the
+    // pointerInput coroutine.
+    val behaviorModifier: Modifier = if (reorderMode) {
+        Modifier
+            .bindBounds(widget.id, controller.dragBounds)
+            .dragSource(
+                widget = widget,
+                controller = controller,
+                onDragStart = onDragStart,
+                onDragHover = onDragHover,
+                onDragCommit = onDragCommit,
+				setMenuExpanded = { menuExpanded = it}
+            )
+    } else {
+        Modifier.pointerInput(widget.id) {
+            detectTapGestures(onLongPress = { menuExpanded = true })
+        }
+    }
 
     Box(modifier = modifier) {
         WidgetCardShell(
@@ -323,7 +542,7 @@ private fun WidgetCard(
             alpha = if (isBeingDragged) 0f else 1f,
             onTransfer = onTransfer,
             isBeingDragged = isBeingDragged,
-            showBadge = true,
+            showBadge = reorderMode,
             dragModifier = behaviorModifier,
         )
 
@@ -365,7 +584,7 @@ private fun FloatingWidgetCard(widget: GenericWidget) {
 /**
  * Outer Box reserves layout space for the overhanging [TransferBadge] (top + start padding).
  * Inner Box holds the visible card; [dragModifier] is where callers attach `bindBounds` /
- * `dragSource` (the unified long-press → menu / drag gesture). Aligning those
+ * `dragSource` (or the long-press → menu pointerInput in default mode). Aligning those
  * on the inner Box means adjacent cells' rects don't overlap in the overhang region —
  * eliminating cross-cell hover flicker.
  */
